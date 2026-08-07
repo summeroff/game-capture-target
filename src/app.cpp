@@ -6,6 +6,8 @@
 #include <cmath>
 #include <dwmapi.h>
 
+#include "resource.h"
+
 #pragma comment(lib, "dwmapi.lib")
 
 namespace {
@@ -119,7 +121,9 @@ bool App::RegisterWindowClass(std::wstring* error)
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.hbrBackground = nullptr; // we paint fully each frame
   wc.lpszClassName = cfg_.windowClass.c_str();
-  wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+  wc.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APPICON));
+  if (!wc.hIcon)
+    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
   wc.hIconSm = wc.hIcon;
 
   atom_ = RegisterClassExW(&wc);

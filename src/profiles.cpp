@@ -13,8 +13,8 @@ const Profile kProfiles[] = {
      false, true, BlockCaptureMode::None, "exe match; Warning + allow_third_party_software msg"},
 
     {"cs2-blocked", "CS2 (capture blocked)", "cs2.exe", L"FakeGameWindowClass", L"Counter-Strike 2",
-     1, 1, true, false, false, BlockCaptureMode::SignaturePolicy,
-     "same as cs2 + signature-policy — warning AND no capture"},
+     1, 1, true, false, false, BlockCaptureMode::SquatIpc,
+     "same as cs2 + squat-ipc (silent refuse; F7 reversible). Use --block-capture signature-policy for loader-level fidelity"},
 
     {"minecraft", "Minecraft: Java Edition", "javaw.exe", L"FakeGameWindowClass", L"Minecraft", 3, 0,
      true, false, true, BlockCaptureMode::None, "exe+title prefix (try --title \"Minecraft 1.21\")"},

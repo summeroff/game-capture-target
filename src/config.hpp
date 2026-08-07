@@ -37,6 +37,7 @@ struct Config {
 
   BlockCaptureMode blockCapture = BlockCaptureMode::None;
   int blockCaptureAfterSeconds = 0; // 0 = apply immediately (if mode != none)
+  bool showBlockErrors = false;     // if true, skip SetErrorMode suppression
 
   std::string profileId;
   std::string profileExeName; // informational; rename is done by launch scripts

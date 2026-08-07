@@ -340,6 +340,7 @@ void PrintConfig(const Config& c)
   Log("  no-hud      = %d", c.noHud ? 1 : 0);
   Log("  block-capture = %s", Narrow(BlockCaptureModeName(c.blockCapture)).c_str());
   Log("  block-after = %d", c.blockCaptureAfterSeconds);
+  Log("  show-block-errors = %d", c.showBlockErrors ? 1 : 0);
   Log("  capture-expected = %s", c.captureExpected ? "yes" : "NO");
   Log("=======================");
 }
@@ -370,14 +371,18 @@ Options:
   --list-profiles --json    Print profiles as JSON (consumed by tools/launch.ps1)
   --block-capture <mode>    none | signature-policy | squat-ipc | unload-hook
   --block-capture-after <s> Delay before applying block (0 = immediate)
+  --show-block-errors       Do not suppress Windows loader hard-error dialogs
   --help                    This help
 
 Capture blocking:
   signature-policy  SetProcessMitigationPolicy(MicrosoftSignedOnly) AFTER the
                     renderer is fully up. Blocks unsigned graphics-hook*.dll.
                     IRREVERSIBLE for the process — cannot be toggled off.
+                    By default loader "Bad Image" dialogs are suppressed
+                    (SetErrorMode); use --show-block-errors to see them.
   squat-ipc         Pre-create OBS hook IPC objects (CaptureHook_* + pid) with
                     an empty DACL so hook init fails. Reversible (F7).
+                    Default mechanism for profile cs2-blocked (silent).
   unload-hook       Poll for graphics-hook*.dll and FreeLibrary it. Reversible (F7).
 
 Hotkeys:
@@ -570,6 +575,10 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     }
     if (EqI(a, L"--no-hud")) {
       c.noHud = true;
+      continue;
+    }
+    if (EqI(a, L"--show-block-errors")) {
+      c.showBlockErrors = true;
       continue;
     }
 

@@ -56,21 +56,20 @@ e2e harnesses that cannot pick from the antd virtualized dropdown.
 ## Capture-refusal modes
 
 Round 1 could show the CS2 compatibility **warning** but still captured successfully. Round 2
-adds real refusal:
+adds real refusal; round 3 silences the OS “Bad Image” spam for signature-policy.
 
 | Mode | Flag | Reversible | What it does |
 |------|------|------------|--------------|
 | none | `--block-capture none` | — | Normal capture |
-| signature-policy | `--block-capture signature-policy` | **No** | `SetProcessMitigationPolicy(MicrosoftSignedOnly)` **after** the renderer is fully up, so unsigned `graphics-hook*.dll` cannot load. Same class of block as anti-cheat / third-party-software policy. |
-| squat-ipc | `--block-capture squat-ipc` | **Yes (F7)** | Pre-creates OBS hook IPC objects (`CaptureHook_*` + pid) with an empty DACL so hook init fails even if the DLL loads |
+| signature-policy | `--block-capture signature-policy` | **No** | `SetProcessMitigationPolicy(MicrosoftSignedOnly)` **after** the renderer is fully up. Blocks unsigned `graphics-hook*.dll`. Loader hard-error dialogs suppressed by default (`SetErrorMode`); `--show-block-errors` restores them. |
+| squat-ipc | `--block-capture squat-ipc` | **Yes (F7)** | Pre-creates OBS hook IPC objects (`CaptureHook_*` + pid) with an empty DACL. **Default for `cs2-blocked`** (silent, reversible). |
 | unload-hook | `--block-capture unload-hook` | **Yes (F7)** | Polls for `graphics-hook*.dll` and `FreeLibrary`s it |
 
 Also:
 
 - `--block-capture-after <seconds>` — capture works first, then block applies (one-way if signature-policy)
 - `F7` — toggle reversible blocks
-
-**signature-policy is irreversible for the process.** Documented in `--help`.
+- `--show-block-errors` — keep Windows “Bad Image” dialogs (debug the block mechanism)
 
 ## Graphics APIs
 
@@ -89,7 +88,7 @@ truth: `fakegame.exe --list-profiles --json` (consumed by `launch.ps1` — no du
 | Profile | exe | Match | Sev | Capture expected |
 |---------|-----|-------|-----|------------------|
 | cs2 | cs2.exe | exe | Warning | yes |
-| cs2-blocked | cs2.exe | exe | Warning | **NO** (signature-policy) |
+| cs2-blocked | cs2.exe | exe | Warning | **NO** (default: squat-ipc) |
 | minecraft | javaw.exe | exe+title | Normal | yes |
 | wuthering | Client-Win64-Shipping.exe | exe+title | Warning | yes |
 | destiny2 | destiny2.exe | exe | Error | yes |
@@ -124,6 +123,7 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--list-profiles` | — | table or with `--json` |
 | `--block-capture` | none | none \| signature-policy \| squat-ipc \| unload-hook |
 | `--block-capture-after` | 0 | seconds |
+| `--show-block-errors` | off | allow Windows loader hard-error dialogs |
 
 ## Hotkeys
 

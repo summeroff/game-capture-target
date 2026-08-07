@@ -18,9 +18,10 @@ add_executable(fakegame
   src/d3d12_renderer.cpp
   src/vulkan_renderer.cpp
   src/none_renderer.cpp
+  resources/app.rc
 )
 
-target_include_directories(fakegame PRIVATE src)
+target_include_directories(fakegame PRIVATE src resources)
 
 target_compile_definitions(fakegame PRIVATE
   UNICODE

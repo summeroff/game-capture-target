@@ -341,3 +341,73 @@ Report actual observed results, not intent.
     `tools/_spawn/` empty.
 21. A deliberately broken launch (e.g. profile whose exe cannot start) exits non-zero and says
     why, rather than reporting success.
+
+---
+
+# Addendum — round 3 (bug found in testing)
+
+Round 2 works: `-Profile cs2-blocked` genuinely refuses capture. Verified against Streamlabs
+Desktop — the source stayed `0x0` for 24s while the CS2 compatibility warning rendered, and
+`GetProcessMitigationPolicy(pid, ProcessSignaturePolicy)` reports `0x5`
+(`MicrosoftSignedOnly | MitigationOptIn`). The mechanism is right.
+
+## Bug: `signature-policy` pops a modal Windows dialog on every hook attempt
+
+When OBS injects, Windows shows a modal **"Bad Image"** message box:
+
+```
+Counter-Strike 2: cs2.exe - Bad Image
+C:\ProgramData\obs-studio-hook\graphics-hook64.dll is either not designed to run on
+Windows or it contains an error. ... Error status 0xc0000428.
+```
+
+`0xc0000428` is `STATUS_INVALID_IMAGE_HASH` — the loader rejecting the DLL's signature. That is
+the mitigation doing exactly its job, so the block itself is correct. The problem is the UI:
+
+1. **It is not faithful.** Real CS2 with anti-cheat refuses injection *silently*. A tester
+   reproducing a support issue should see what a user sees, not an OS error box.
+2. **It repeats.** Game Capture retries the hook on an interval forever, so this is not one
+   dialog — it is a dialog every few seconds until the source is removed. That makes the blocked
+   profile painful for manual QA and can block unattended runs.
+
+### Fix
+
+Call, once at process startup:
+
+```c
+SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX | SEM_NOGPFAULTERRORBOX);
+```
+
+`SEM_FAILCRITICALERRORS` is what suppresses the loader's hard-error box for
+`STATUS_INVALID_IMAGE_HASH`; the load still fails, silently.
+
+Two things to get right:
+
+- **Use `SetErrorMode`, not `SetThreadErrorMode`.** The failing load happens on a thread OBS
+  creates inside our process via its injector — we never see that thread and cannot set a
+  thread-scoped mode on it. The mode must be process-wide.
+- **Set it at startup, not next to the mitigation call.** A hook attempt can land at any time,
+  including before `--block-capture-after` fires. Setting the error mode is harmless when no
+  blocking is configured, so do it unconditionally in `main`.
+
+Log once that error dialogs are suppressed, so a tester who *wants* to see the failure knows why
+it is silent. Optionally add `--show-block-errors` to skip the `SetErrorMode` call for anyone
+debugging the block mechanism itself.
+
+### Also worth reconsidering
+
+`squat-ipc` produces no dialog by construction and is reversible with `F7`. Consider making it
+the default mechanism for the `cs2-blocked` profile, keeping `signature-policy` as the
+higher-fidelity opt-in (it blocks at the loader, which is closer to what anti-cheat does). Either
+way `signature-policy` needs the `SetErrorMode` fix, since it is selectable directly.
+
+## Acceptance criteria (round 3)
+
+22. `-Profile cs2-blocked` with a Game Capture source pointed at it, left running for **5
+    minutes**: zero Windows error dialogs, and the source stays `0x0` the whole time. One
+    suppressed dialog is not sufficient evidence — OBS retries, so the test is about the repeat.
+23. The OBS log still shows repeated hook attempts over that period, proving capture is being
+    attempted and refused rather than never tried.
+24. `--show-block-errors` (if implemented) restores the dialog, confirming the suppression is
+    deliberate and not an accident of timing.
+25. `squat-ipc` and `unload-hook` produce no dialogs either, before or after an `F7` toggle.
