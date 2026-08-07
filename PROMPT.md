@@ -12,8 +12,10 @@ dependencies, trivially renameable, fully configurable from the command line.
 
 ## Where it lives
 
-Create it as a standalone project at `C:\work\repos\capture-test-app` (already exists, containing
-only this file; `git init` it). Do not modify any sibling repo under `C:\work\repos\`.
+Public repo: https://github.com/summeroff/game-capture-target (MIT).  
+Local clone may still live under an older folder name (e.g. `C:\work\repos\capture-test-app`);
+that path is not load-bearing — behaviour never depends on directory or exe name.
+Do not modify any sibling repo under `C:\work\repos\` unless that is the task.
 
 ## Build
 

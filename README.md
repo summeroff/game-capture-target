@@ -1,4 +1,4 @@
-# fakegame — Windows capture test app
+# game-capture-target (`fakegame.exe`)
 
 Small, dependency-free Win32 tool for exercising **OBS / Streamlabs Desktop** Game Capture
 and Window Capture locally. Built because renaming system binaries (`charmap.exe` → `cs2.exe`)
@@ -8,7 +8,8 @@ Optimised for: builds in seconds, zero third-party deps (Vulkan headers vendored
 renameable, fully configurable from the command line. Behaviour never depends on the executable
 filename.
 
-**GitHub:** https://github.com/summeroff/capture-test-app (private)
+**GitHub:** https://github.com/summeroff/game-capture-target (public, MIT)  
+Binary name remains **`fakegame.exe`** (build output); rename freely for OBS profile tests.
 
 ## Build
 
