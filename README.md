@@ -4,8 +4,11 @@ Small, dependency-free Win32 tool for exercising **OBS / Streamlabs Desktop** Ga
 and Window Capture locally. Built because renaming system binaries (`charmap.exe` → `cs2.exe`)
 fails silently on SxS/manifest resolution.
 
-Optimised for: builds in seconds, zero third-party deps, trivially renameable, fully
-configurable from the command line. Behaviour never depends on the executable filename.
+Optimised for: builds in seconds, zero third-party deps (Vulkan headers vendored), trivially
+renameable, fully configurable from the command line. Behaviour never depends on the executable
+filename.
+
+**GitHub:** https://github.com/summeroff/capture-test-app (private)
 
 ## Build
 
@@ -15,9 +18,7 @@ configurable from the command line. Behaviour never depends on the executable fi
 scripts\build.bat
 ```
 
-Produces `build\bin\fakegame.exe` (x64, Release, static CRT `/MT`).
-
-x86 (covers the 32-bit `graphics-hook32.dll` inject path):
+→ `build\bin\fakegame.exe` (x64, Release, static CRT `/MT`)
 
 ```bat
 scripts\build-x86.bat
@@ -25,135 +26,142 @@ scripts\build-x86.bat
 
 → `build-x86\bin\fakegame.exe`
 
-Manual:
+Links only: `d3d11`, `d3d12`, `dxgi`, `d3dcompiler`, `user32`, `gdi32`, `dwmapi`, `advapi32`,
+`psapi`. Vulkan is **LoadLibrary**'d at runtime (`vulkan-1.dll`) — no Vulkan SDK needed to build.
+Headers live under `third_party/Vulkan-Headers` (Khronos, vendored — not a git submodule).
 
-```bat
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
-```
-
-No vcpkg, no Conan, no submodules. Links only: `d3d11`, `dxgi`, `d3dcompiler`, `user32`,
-`gdi32`, `dwmapi`.
-
-### Self-contained binary
-
-- Static CRT (`/MT` / `/MTd`)
-- HLSL compiled at runtime with `D3DCompile` (no `.cso` / `.hlsl` beside the exe)
-- Copy the single `.exe` anywhere, rename it anything, run it
-
-## Run
-
-```bat
-build\bin\fakegame.exe
-build\bin\fakegame.exe --title "Counter-Strike 2" --api d3d11
-build\bin\fakegame.exe --api none --exit-after 10
-```
-
-### Rename helper
+## Quick start (QA)
 
 ```powershell
-.\tools\spawn-as.ps1 -As cs2.exe -GameArgs '--title "Counter-Strike 2"'
-.\tools\spawn-as.ps1 -As destiny2.exe
-.\tools\spawn-as.ps1 -As javaw.exe -GameArgs '--api d3d11'
+# Interactive menu — Enter through defaults for a sensible capturable run
+.\tools\launch.ps1
+
+# Reproduce the real CS2 condition: warning + capture never succeeds
+.\tools\launch.ps1 -Profile cs2-blocked -Json
+
+# Or explicit:
+.\tools\launch.ps1 -Profile cs2 -Api d3d11 -BlockCapture signature-policy -Json
+
+# Machine-readable profile table (same JSON as the exe)
+.\tools\launch.ps1 -List -Json
+.\build\bin\fakegame.exe --list-profiles --json
+
+# Kill everything this tool spawned
+.\tools\launch.ps1 -StopAll
 ```
 
-Copies `fakegame.exe` → `tools\_spawn\<name>` and launches it. Passthrough args are unchanged.
+`-Json` emits `obsWindowSetting` (`title:class:exe` with `#`/`:` encoded as OBS expects) for
+e2e harnesses that cannot pick from the antd virtualized dropdown.
 
-### Useful exe names (OBS compatibility severities)
+## Capture-refusal modes
 
-Drawn from OBS `compatibility.json` / win-capture severity handling. Rename alone hits each branch:
+Round 1 could show the CS2 compatibility **warning** but still captured successfully. Round 2
+adds real refusal:
 
-| Exe name        | Typical severity | Notes                                      |
-|-----------------|------------------|--------------------------------------------|
-| `fakegame.exe`  | (none)           | Default; not on the exe blacklist           |
-| `javaw.exe`     | 0 Normal         | Minecraft-style Java launcher              |
-| `cs2.exe`       | 1 Warning        | Counter-Strike 2; third-party software warn|
-| `csgo.exe`      | 1 Warning        | CS:GO                                      |
-| `destiny2.exe`  | 2 Error          | Destiny 2                                  |
-| `overwatch.exe` | varies           | Blizzard titles often special-cased        |
+| Mode | Flag | Reversible | What it does |
+|------|------|------------|--------------|
+| none | `--block-capture none` | — | Normal capture |
+| signature-policy | `--block-capture signature-policy` | **No** | `SetProcessMitigationPolicy(MicrosoftSignedOnly)` **after** the renderer is fully up, so unsigned `graphics-hook*.dll` cannot load. Same class of block as anti-cheat / third-party-software policy. |
+| squat-ipc | `--block-capture squat-ipc` | **Yes (F7)** | Pre-creates OBS hook IPC objects (`CaptureHook_*` + pid) with an empty DACL so hook init fails even if the DLL loads |
+| unload-hook | `--block-capture unload-hook` | **Yes (F7)** | Polls for `graphics-hook*.dll` and `FreeLibrary`s it |
 
-OBS blacklisted default names (avoid for the *built* binary; fine as rename targets only if you
-intentionally want blacklist behaviour):  
-`explorer, steam, battle.net, galaxyclient, skype, uplay, origin, devenv, taskmgr, chrome,
-discord, firefox, systemsettings, applicationframehost, cmd, shellexperiencehost,
-winstore.app, searchui, lockapp`.
+Also:
 
-Match flags reference: `MATCH_EXE=1`, `MATCH_TITLE=2`, `MATCH_CLASS=4`.
+- `--block-capture-after <seconds>` — capture works first, then block applies (one-way if signature-policy)
+- `F7` — toggle reversible blocks
+
+**signature-policy is irreversible for the process.** Documented in `--help`.
+
+## Graphics APIs
+
+| `--api` | Status | Notes |
+|---------|--------|-------|
+| `d3d11` | default | FLIP_DISCARD / DISCARD via `--flip-model` |
+| `d3d12` | supported | DXGI flip swapchain + HUD |
+| `vulkan` | supported | Dynamic `vulkan-1.dll`; cycling clear + title frame counter |
+| `none` | supported | GDI only, no swapchain → OBS “not a game” |
+
+## Profiles
+
+`--profile <name>` sets title/class/block defaults (overridable by later flags). Single source of
+truth: `fakegame.exe --list-profiles --json` (consumed by `launch.ps1` — no duplicate table).
+
+| Profile | exe | Match | Sev | Capture expected |
+|---------|-----|-------|-----|------------------|
+| cs2 | cs2.exe | exe | Warning | yes |
+| cs2-blocked | cs2.exe | exe | Warning | **NO** (signature-policy) |
+| minecraft | javaw.exe | exe+title | Normal | yes |
+| wuthering | Client-Win64-Shipping.exe | exe+title | Warning | yes |
+| destiny2 | destiny2.exe | exe | Error | yes |
+| gta-sa | gta-sa.exe | exe | Error | yes |
+| chromium-gc | any | class | Error | yes |
+| gaming-services | any | class | Error | yes |
+| terraria | terraria.exe | exe | Normal | yes |
+| roblox | RobloxPlayerBeta.exe | exe | Warning | yes |
+| steam | any | class | Normal | Window Capture |
+| excel | any | class | Normal | Window Capture |
+
+Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 
 ## Command-line flags
 
-All optional. `--config <path>` loads an INI first; flags override file values.
-Resolved config is printed to **stdout** and shown in the on-screen HUD.
-
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--title <string>` | `Fake Game` | Window title (OBS title match is prefix) |
-| `--class <string>` | `FakeGameWindowClass` | Window class (fixed at `RegisterClassEx`) |
-| `--width <n>` | `1280` | Client area width |
-| `--height <n>` | `720` | Client area height |
-| `--mode <mode>` | `windowed` | `windowed` \| `borderless` \| `fullscreen-exclusive` |
-| `--api <api>` | `d3d11` | `d3d11` \| `none` (`d3d12`/`opengl` reserved) |
-| `--fps <n>` | `60` | Frame pacing |
-| `--vsync <0\|1>` | `1` | |
-| `--flip-model <0\|1>` | `1` | `FLIP_DISCARD` vs legacy `DISCARD` |
-| `--buffers <n>` | `2` | Swapchain buffer count (2–8) |
-| `--exit-after <seconds>` | `0` | `0` = never |
+| `--title <string>` | `Fake Game` | |
+| `--class <string>` | `FakeGameWindowClass` | Fixed at RegisterClassEx |
+| `--width` / `--height` | 1280 / 720 | |
+| `--mode` | windowed | windowed \| borderless \| fullscreen-exclusive |
+| `--api` | d3d11 | d3d11 \| d3d12 \| vulkan \| none |
+| `--fps` | 60 | |
+| `--vsync` | 1 | |
+| `--flip-model` | 1 | d3d11/d3d12; logged ignored on vulkan/none |
+| `--buffers` | 2 | |
+| `--exit-after` | 0 | |
 | `--topmost` | off | |
 | `--no-hud` | off | |
-| `--config <path>` | — | INI; keys mirror flag names (`title=`, `api=`, …) |
-| `--help` | | |
-
-### Example INI
-
-```ini
-title=Fake Game
-class=FakeGameWindowClass
-width=1280
-height=720
-mode=windowed
-api=d3d11
-fps=60
-vsync=1
-flip-model=1
-buffers=2
-```
+| `--config <path>` | — | INI; flags override |
+| `--profile <name>` | — | |
+| `--list-profiles` | — | table or with `--json` |
+| `--block-capture` | none | none \| signature-policy \| squat-ipc \| unload-hook |
+| `--block-capture-after` | 0 | seconds |
 
 ## Hotkeys
 
-Every transition is logged to stdout with a timestamp (correlate with OBS logs).
-
 | Key | Action |
 |-----|--------|
-| `F1` | Cycle windowed → borderless → fullscreen-exclusive |
-| `F2` | Resize swapchain through preset resolutions |
-| `F3` | Destroy + recreate swapchain |
-| `F4` | Destroy + recreate D3D device (TDR / device-lost sim) |
-| `F5` | Change window title at runtime (append counter) |
-| `F6` | Toggle churn mode (~2 Hz resize + recreate) |
-| `Esc` | Quit |
+| F1 | Cycle windowed / borderless / fullscreen-exclusive |
+| F2 | Resize swapchain presets |
+| F3 | Recreate swapchain |
+| F4 | Recreate device |
+| F5 | Change title (+ counter) |
+| F6 | Churn mode ~2 Hz |
+| F7 | Toggle reversible capture block |
+| Esc | Quit |
 
-## On-screen content
+Every transition is logged to stdout with a timestamp.
 
-Designed so a **stale** capture is obvious:
+## Low-level rename helper
 
-- Large monotonically increasing **frame counter**
-- **Rotating / orbiting coloured quad** every frame
-- **Cycling clear colour**
-- HUD: resolution, API, swap effect, present mode, window class/title, PID, elapsed time
+```powershell
+.\tools\spawn-as.ps1 -As cs2.exe -GameArgs '--title "Counter-Strike 2"'
+```
 
-`--api none` draws the same content with GDI only — **no DXGI swapchain** — so Game Capture
-should list the window but fail with the “not a game” path.
+Prefer `launch.ps1` for profile-aware QA.
 
-## OBS / Streamlabs checklist
+## Acceptance (app-side, verified in build)
 
-1. Build x64 Release; confirm `build\bin\fakegame.exe` exists.
-2. Copy alone to an empty folder, rename to `cs2.exe`, run → window animates, no missing-DLL/SxS.
-3. Game Capture → *Capture specific window* → `fakegame` / renamed window appears.
-4. `--api d3d11`: live frames + advancing counter in preview.
-5. `--api none`: window listed, capture fails (“not a game”).
-6. Renamed `cs2.exe`: properties show CS2 compatibility warning (`-allow_third_party_software`).
-7. Exercise `F1` / `F3` / `F6` — app must not crash; note whether capture recovers.
-8. Repeat 3–4 with the x86 build.
+| # | Check | Result |
+|---|-------|--------|
+| 1 | x64 Release `/W4` | green |
+| 2 | rename → `cs2.exe` alone | no missing DLL (static CRT) |
+| 9 | signature-policy applies after D3D | log: `signature-policy APPLIED` |
+| — | squat-ipc creates deny DACL objects | log lists CaptureHook_*+pid |
+| — | `--api d3d12` | device + swapchain ok |
+| — | `--api vulkan` | device + swapchain ok |
+| — | `launch.ps1 -Profile cs2 -Json` | pid/hwnd/obsWindowSetting |
+| — | `-StopAll` | kills spawn dir processes |
+
+OBS/Streamlabs UI checks (warning text, blank preview, F7 restore) need a human with SLD open.
 
 ## Layout
 
@@ -161,20 +169,11 @@ should list the window but fail with the “not a game” path.
 CMakeLists.txt
 PROMPT.md
 README.md
-scripts/build.bat
-scripts/build-x86.bat
-tools/spawn-as.ps1
+scripts/build.bat  build-x86.bat  build-wx.bat  verify.bat
+tools/launch.ps1   spawn-as.ps1
+third_party/Vulkan-Headers/   # vendored Khronos headers
 src/
-  main.cpp
-  app.cpp / app.hpp
-  config.cpp / config.hpp
-  d3d11_renderer.cpp
-  none_renderer.cpp
-  renderer.hpp
-  font8x8.hpp
-  log.hpp
+  main.cpp app.* config.* profiles.* block_capture.*
+  d3d11_renderer.cpp d3d12_renderer.cpp vulkan_renderer.cpp none_renderer.cpp
+  renderer.hpp font8x8.hpp log.hpp
 ```
-
-## License
-
-Internal developer tool. Use / modify freely in your capture testing workflow.

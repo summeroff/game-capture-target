@@ -12,7 +12,11 @@ add_executable(fakegame
   src/main.cpp
   src/config.cpp
   src/app.cpp
+  src/profiles.cpp
+  src/block_capture.cpp
   src/d3d11_renderer.cpp
+  src/d3d12_renderer.cpp
+  src/vulkan_renderer.cpp
   src/none_renderer.cpp
 )
 
@@ -34,8 +38,6 @@ if(MSVC)
     /utf-8
     /Zc:__cplusplus
   )
-  # Console subsystem so stdout logging works without AllocConsole.
-  # Still a normal top-level HWND for OBS enumeration.
   set_target_properties(fakegame PROPERTIES
     WIN32_EXECUTABLE FALSE
     OUTPUT_NAME "fakegame"
@@ -47,14 +49,22 @@ endif()
 
 target_link_libraries(fakegame PRIVATE
   d3d11
+  d3d12
   dxgi
   d3dcompiler
   user32
   gdi32
   dwmapi
+  advapi32
+  psapi
 )
 
-# Drop next to build tree root for convenience
+# Vulkan headers: VULKAN_SDK, else vendored Khronos headers (no SDK required to build).
+if(DEFINED ENV{VULKAN_SDK} AND EXISTS "$ENV{VULKAN_SDK}/Include/vulkan/vulkan.h")
+  target_include_directories(fakegame PRIVATE "$ENV{VULKAN_SDK}/Include")
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include/vulkan/vulkan.h")
+  target_include_directories(fakegame PRIVATE "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include")
+endif()
 set_target_properties(fakegame PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin"

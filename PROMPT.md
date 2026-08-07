@@ -150,3 +150,194 @@ Verify each of these and report the actual result — not "should work":
 
 Working source, `CMakeLists.txt`, `tools/spawn-as.ps1`, and a `README.md` covering build steps,
 every flag, every hotkey, and the rename-based severity table.
+
+---
+
+# Addendum — round 2
+
+Round 1 is built and working: a renamed `cs2.exe` is listed by Game Capture and triggers the
+Counter-Strike 2 compatibility warning. The gap is that it then **captures successfully**, so it
+exercises the message but not the condition. Real CS2 launched without
+`-allow_third_party_software` shows the warning *and* refuses to be captured. Three additions.
+
+## 1. Capture-refusal modes (highest priority)
+
+New flag `--block-capture <none|signature-policy|squat-ipc|unload-hook>`, default `none`.
+
+The point is to reproduce "warning is shown AND capture never succeeds", so the whole failure
+path can be exercised: OBS retries the hook forever, the status text stays, no frames arrive.
+
+**`signature-policy`** — most faithful to the CS2/anti-cheat case. Call
+`SetProcessMitigationPolicy(ProcessSignaturePolicy, ...)` with `MicrosoftSignedOnly = 1`.
+OBS's `graphics-hook64.dll` is not Microsoft-signed, so the injected load fails outright — the
+same class of block third-party-software protection applies.
+- **Apply it only after** the D3D device, compiled shaders, and swapchain exist. Graphics driver
+  user-mode DLLs and `d3dcompiler` load lazily and are not Microsoft-signed either; applying the
+  policy too early will break the renderer, not the hook.
+- This mitigation is **irreversible for the process** — it cannot be paired with a
+  "block later, unblock again" toggle. Say so in `--help` and the README.
+
+**`squat-ipc`** — reversible. Pre-create OBS's hook handshake objects with a DACL that denies
+access, so hook initialisation fails even if the DLL loads. Base names are in
+`obs-studio/shared/obs-hook-config/graphics-hook-info.h`:
+`CaptureHook_Restart`, `CaptureHook_Stop`, `CaptureHook_HookReady`, `CaptureHook_Exit`,
+`CaptureHook_Initialize`, `CaptureHook_KeepAlive`, `CaptureHook_TextureMutex1/2`.
+The target process id is appended in decimal — confirm the exact construction against
+`init_event` / `init_mutex` in `plugins/win-capture/graphics-hook/graphics-hook.c` and
+`open_event_gc` in `plugins/win-capture/game-capture.c` rather than trusting this list.
+
+**`unload-hook`** — reversible. Poll the module list for `graphics-hook*.dll` and `FreeLibrary`
+it. Crude and racy, but it models detect-and-evict anti-cheat and is easy to toggle live.
+
+Also add:
+- `--block-capture-after <seconds>` — capture succeeds first, then is broken. Exercises the
+  transition from working to failed, which is where OBS state machines tend to be wrong.
+  Reject this combined with `signature-policy` (irreversible), or document that it is one-way.
+- `F7` — toggle blocking at runtime for the two reversible modes.
+- Log every hook attempt observed, block applied, and block lifted, with a timestamp, so the app
+  log can be diffed against the OBS log.
+
+## 2. More graphics APIs
+
+Promote these from "reserved" to real, since OBS's graphics hook has a separate code path per API
+and each is a distinct thing to regress:
+
+- `--api d3d12` — the hook's D3D12 path differs substantially from D3D11.
+- `--api vulkan` — the hook layers a Vulkan device; worth having even though it is the largest
+  single piece of work here. Keep it behind the same renderer interface.
+- `--api d3d9` (optional, lower value) — legacy hook path, still present in `graphics-hook`.
+
+Keep `d3d11` the default and `none` as the no-swapchain case. All existing flags
+(`--flip-model`, `--buffers`, `--mode`, hotkeys F1–F4, F6) must work per API where meaningful;
+where a flag doesn't apply, log that it was ignored rather than silently accepting it.
+
+## 3. Game profile presets
+
+`--profile <name>` sets executable name, window class, and window title together so a tester can
+hit a specific `compatibility.json` entry without knowing the fields. `spawn-as.ps1` should
+accept `-Profile` and do the rename too.
+
+Coverage worth shipping, drawn from `obs-studio/plugins/win-capture/data/compatibility.json`.
+Match flags are `EXE=1`, `TITLE=2`, `CLASS=4`; title matching is a **prefix** match.
+
+| Profile | exe | class | title | flags | sev | Exercises |
+|---|---|---|---|---|---|---|
+| `cs2` | `cs2.exe` | — | — | 1 | 1 Warning | exe match, the reported case |
+| `minecraft` | `javaw.exe` | — | `Minecraft` | 3 | 0 Normal | **exe + title prefix**; try `Minecraft 1.21` |
+| `wuthering` | `Client-Win64-Shipping.exe` | — | `Wuthering Waves` | 3 | 1 Warning | second exe+title case |
+| `destiny2` | `destiny2.exe` | — | — | 1 | 2 Error | **error severity** |
+| `gta-sa` | `gta-sa.exe` | — | — | 1 | 2 Error | error, no URL in message |
+| `chromium-gc` | any | `Chrome_WidgetWin_1` | — | 4 | 2 Error | **class-only match** |
+| `gaming-services` | any | `GAMINGSERVICESUI_HOSTING_WINDOW_CLASS` | — | 4 | 2 Error | second class-only case |
+| `terraria` | `terraria.exe` | — | — | 1 | 0 Normal | normal severity |
+| `roblox` | `RobloxPlayerBeta.exe` | — | — | 1 | 1 Warning | entry present for **both** game and window capture |
+| `steam` | any | `SDL_app` | — | 4 | 0 Normal | **window-capture-only** entry |
+| `excel` | any | `XLMAIN` | — | 4 | 0 Normal | window-capture-only, Office class |
+
+The last two matter because Window Capture is a different source type with its own compatibility
+entries and its own properties UI in Streamlabs Desktop — worth being able to drive from the same
+tool. Roughly 20 further window-capture-only entries exist (Office, Adobe, Epic, Ubisoft, UWP,
+WinUI 3); add them only if cheap, the two above are representative.
+
+A `--profile` must remain overridable by an explicit `--title` / `--class` on the same command
+line, so prefix-matching can be tested.
+
+## 4. QA launcher script
+
+The rename-then-launch dance is real friction: a tester currently has to know the executable
+name, the window class, and which flags reproduce which condition. Replace that with one
+front-door script, `tools/launch.ps1` (PowerShell — this is a Windows-only tool and the team
+works in PowerShell; do not write it in bash).
+
+It must serve two very different callers.
+
+**Interactive (a QA tester, no arguments).** `.\tools\launch.ps1` prints a numbered menu of
+profiles annotated with what each one is *for*, not just its name — severity, and crucially
+whether capture is expected to succeed:
+
+```
+  #  Profile          Match      Severity   Capture expected
+  1  cs2              exe        Warning    yes
+  2  cs2-blocked      exe        Warning    NO  <- reproduces the real CS2 condition
+  3  minecraft        exe+title  Normal     yes
+  4  destiny2         exe        Error      yes
+  5  chromium-gc      class      Error      yes
+ ...
+```
+
+Then prompt for graphics API and capture-blocking mode (both defaulted so a tester can press
+Enter through), echo the fully resolved command line, and launch. Pressing Enter at every prompt
+must produce a working, sensible run.
+
+**Non-interactive (automated tests).** Every choice available as a parameter, no prompts, and
+machine-readable output:
+
+```powershell
+.\tools\launch.ps1 -Profile cs2 -Api d3d11 -BlockCapture signature-policy -Json
+.\tools\launch.ps1 -List -Json          # enumerate profiles without launching
+.\tools\launch.ps1 -StopAll             # kill everything this script spawned, clean the spawn dir
+```
+
+`-Json` emits one object with at minimum:
+
+```json
+{
+  "profile": "cs2",
+  "pid": 41756,
+  "hwnd": "0x0023158C",
+  "exePath": "C:\\...\\tools\\_spawn\\cs2\\cs2.exe",
+  "exeName": "cs2.exe",
+  "windowClass": "FakeGameWindowClass",
+  "windowTitle": "Counter-Strike 2",
+  "obsWindowSetting": "Counter-Strike 2:FakeGameWindowClass:cs2.exe",
+  "captureExpected": false
+}
+```
+
+`obsWindowSetting` is the payload of the `window` property on an OBS game/window capture source:
+`title:class:exe`, with `:` encoded as `#3A` and `#` as `#22` (see `ms_build_window_strings` in
+`obs-studio/libobs/util/windows/window-helpers.c`). Emitting it is the single most useful thing
+this script can do for automated tests — the Streamlabs e2e harness cannot pick the window from
+the properties dropdown (antd virtualizes the option list, so only the first handful of windows
+in z-order exist in the DOM) and has to set the setting directly via the API instead.
+
+Further requirements:
+
+- **Single source of truth for profiles.** The app owns the table and exposes
+  `fakegame.exe --list-profiles --json`; the script consumes that rather than keeping its own
+  copy. Adding a profile to the app must not require editing the script.
+- **Spawn into per-profile directories** — `tools/_spawn/<profile>/<exe>` — so several renamed
+  copies can run at once without colliding. `tools/_spawn/` goes in `.gitignore`.
+- **Exit codes**: 0 when the process started and its window appeared; non-zero with a message on
+  stderr otherwise. Do not report success for a process that exited immediately — that failure
+  mode (a copied binary that dies silently) is exactly what this tool exists to avoid.
+- **Wait for the window**, don't just `Start-Process` and return; poll until the window handle
+  exists or a timeout elapses, then report it.
+- `-ExitAfter <seconds>` passthrough for unattended runs.
+
+## Acceptance criteria (additions)
+
+Report actual observed results, not intent.
+
+9. `--profile cs2 --block-capture signature-policy`: Game Capture shows the CS2 warning **and
+   never captures** — preview stays blank, OBS log shows repeated hook attempts. This is the
+   condition round 1 could not reproduce.
+10. Same with `--block-capture squat-ipc`, and confirm `F7` restores capture without restarting.
+11. `--block-capture-after 15`: capture works, then stops at ~15s; record what the Game Capture
+    source does on the transition.
+12. `--api d3d12` and `--api vulkan`: captured, live, frame counter advancing.
+13. `--profile minecraft --title "Minecraft 1.21"` still matches the Minecraft entry (prefix).
+14. `--profile chromium-gc`: matched by **class** with no matching exe name, error severity.
+15. `--profile steam` selected in a **Window Capture** source surfaces that entry's message.
+16. Confirm `signature-policy` does not break the renderer on a machine with a discrete GPU —
+    the driver UMD must already be loaded before the policy is applied.
+17. `.\tools\launch.ps1` with no arguments, pressing Enter at every prompt, produces a running,
+    capturable window.
+18. `.\tools\launch.ps1 -Profile cs2 -Json` emits valid JSON; feeding its `obsWindowSetting`
+    straight into a Game Capture source's `window` setting selects that window.
+19. `-List -Json` output matches `fakegame.exe --list-profiles --json` exactly — proving the
+    script holds no duplicate profile table.
+20. Launching two different profiles concurrently works; `-StopAll` terminates both and leaves
+    `tools/_spawn/` empty.
+21. A deliberately broken launch (e.g. profile whose exe cannot start) exits non-zero and says
+    why, rather than reporting success.

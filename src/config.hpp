@@ -1,5 +1,7 @@
 #pragma once
 
+#include "block_capture.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -11,8 +13,10 @@ enum class WindowMode {
 
 enum class GraphicsApi {
   D3D11,
-  D3D12,   // stretch — not implemented yet
-  OpenGL,  // stretch — not implemented yet
+  D3D12,
+  Vulkan,
+  D3D9, // optional / not yet
+  OpenGL, // reserved
   None,
 };
 
@@ -30,10 +34,24 @@ struct Config {
   int exitAfterSeconds = 0;
   bool topmost = false;
   bool noHud = false;
+
+  BlockCaptureMode blockCapture = BlockCaptureMode::None;
+  int blockCaptureAfterSeconds = 0; // 0 = apply immediately (if mode != none)
+
+  std::string profileId;
+  std::string profileExeName; // informational; rename is done by launch scripts
+  bool captureExpected = true;
+  int profileSeverity = -1;
+  int profileMatchFlags = 0;
+  bool profileGameCapture = true;
+  bool profileWindowCapture = false;
+
+  bool listProfiles = false;
+  bool listProfilesJson = false;
+  bool help = false;
 };
 
-// Parse argv + optional --config INI. Flags override file.
-// Returns false on hard error (message in *error).
+// Parse argv. Flags override --config and --profile.
 bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error);
 
 const wchar_t* WindowModeName(WindowMode m);
@@ -41,3 +59,4 @@ const wchar_t* GraphicsApiName(GraphicsApi a);
 WindowMode NextWindowMode(WindowMode m);
 
 void PrintConfig(const Config& c);
+void PrintHelp();

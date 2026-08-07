@@ -51,4 +51,6 @@ public:
 };
 
 std::unique_ptr<IRenderer> CreateD3D11Renderer();
+std::unique_ptr<IRenderer> CreateD3D12Renderer();
+std::unique_ptr<IRenderer> CreateVulkanRenderer();
 std::unique_ptr<IRenderer> CreateNoneRenderer();

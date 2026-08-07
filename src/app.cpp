@@ -1,5 +1,6 @@
 #include "app.hpp"
 
+#include "block_capture.hpp"
 #include "log.hpp"
 
 #include <cmath>
@@ -46,6 +47,8 @@ App::App(Config cfg) : cfg_(std::move(cfg))
 
 App::~App()
 {
+  unloadHookArmed_ = false;
+  ReleaseSquatIpc();
   if (renderer_) {
     renderer_->Shutdown();
     renderer_.reset();
@@ -73,6 +76,18 @@ bool App::Initialize(std::wstring* error)
     return false;
   if (!CreateRenderer(error))
     return false;
+
+  // Capture block AFTER renderer is fully up (signature-policy needs driver UMDs loaded).
+  if (cfg_.blockCapture != BlockCaptureMode::None) {
+    if (cfg_.blockCaptureAfterSeconds > 0) {
+      blockPending_ = true;
+      Log("block: will apply %s after %d s", Narrow(BlockCaptureModeName(cfg_.blockCapture)).c_str(),
+          cfg_.blockCaptureAfterSeconds);
+    } else {
+      if (!ApplyBlockNow(error))
+        return false;
+    }
+  }
 
   ShowWindow(hwnd_, SW_SHOW);
   UpdateWindow(hwnd_);
@@ -153,6 +168,12 @@ bool App::CreateRenderer(std::wstring* error)
   case GraphicsApi::D3D11:
     renderer_ = CreateD3D11Renderer();
     break;
+  case GraphicsApi::D3D12:
+    renderer_ = CreateD3D12Renderer();
+    break;
+  case GraphicsApi::Vulkan:
+    renderer_ = CreateVulkanRenderer();
+    break;
   case GraphicsApi::None:
     renderer_ = CreateNoneRenderer();
     break;
@@ -165,7 +186,100 @@ bool App::CreateRenderer(std::wstring* error)
     renderer_.reset();
     return false;
   }
+
+  // Flags that don't apply: log rather than silent accept.
+  if (cfg_.api == GraphicsApi::None || cfg_.api == GraphicsApi::Vulkan) {
+    if (!cfg_.flipModel)
+      Log("note: --flip-model ignored for api=%s", Narrow(GraphicsApiName(cfg_.api)).c_str());
+  }
   return true;
+}
+
+bool App::ApplyBlockNow(std::wstring* error)
+{
+  switch (cfg_.blockCapture) {
+  case BlockCaptureMode::None:
+    return true;
+  case BlockCaptureMode::SignaturePolicy:
+    if (!ApplySignaturePolicy(error))
+      return false;
+    blockActive_ = true;
+    cfg_.captureExpected = false;
+    return true;
+  case BlockCaptureMode::SquatIpc:
+    if (!ApplySquatIpc(error))
+      return false;
+    blockActive_ = true;
+    reversibleMode_ = BlockCaptureMode::SquatIpc;
+    cfg_.captureExpected = false;
+    return true;
+  case BlockCaptureMode::UnloadHook:
+    unloadHookArmed_ = true;
+    blockActive_ = true;
+    reversibleMode_ = BlockCaptureMode::UnloadHook;
+    cfg_.captureExpected = false;
+    Log("block: unload-hook ARMED (will FreeLibrary graphics-hook*.dll when seen)");
+    return true;
+  }
+  return true;
+}
+
+void App::LiftReversibleBlock()
+{
+  if (reversibleMode_ == BlockCaptureMode::SquatIpc) {
+    ReleaseSquatIpc();
+  }
+  unloadHookArmed_ = false;
+  blockActive_ = false;
+  reversibleMode_ = BlockCaptureMode::None;
+  cfg_.captureExpected = true;
+  Log("block: reversible block LIFTED — capture may succeed again");
+}
+
+void App::TickBlockCapture()
+{
+  if (blockPending_ && cfg_.blockCaptureAfterSeconds > 0 &&
+      elapsedSec_ >= static_cast<double>(cfg_.blockCaptureAfterSeconds)) {
+    blockPending_ = false;
+    std::wstring err;
+    Log("block: block-capture-after %d reached — applying %s", cfg_.blockCaptureAfterSeconds,
+        Narrow(BlockCaptureModeName(cfg_.blockCapture)).c_str());
+    if (!ApplyBlockNow(&err))
+      Log("block: apply failed: %s", Narrow(err).c_str());
+  }
+
+  PollHookModules(true);
+
+  if (unloadHookArmed_) {
+    if (TryUnloadGraphicsHook()) {
+      // keep armed — OBS will reinject
+    }
+  }
+}
+
+void App::OnHotkeyBlockToggle()
+{
+  Log("hotkey F7: toggle capture block");
+  if (cfg_.blockCapture == BlockCaptureMode::SignaturePolicy ||
+      (blockActive_ && reversibleMode_ == BlockCaptureMode::None &&
+       cfg_.blockCapture == BlockCaptureMode::SignaturePolicy)) {
+    Log("block: signature-policy is irreversible — F7 ignored");
+    return;
+  }
+
+  if (blockActive_ && reversibleMode_ != BlockCaptureMode::None) {
+    LiftReversibleBlock();
+    return;
+  }
+
+  // Arm current configured reversible mode, defaulting to squat-ipc if none.
+  if (cfg_.blockCapture == BlockCaptureMode::None ||
+      cfg_.blockCapture == BlockCaptureMode::SignaturePolicy) {
+    cfg_.blockCapture = BlockCaptureMode::SquatIpc;
+  }
+  std::wstring err;
+  if (!ApplyBlockNow(&err))
+    Log("block: F7 apply failed: %s", Narrow(err).c_str());
 }
 
 void App::GetMonitorRect(RECT* out) const
@@ -307,6 +421,8 @@ void App::Frame()
 
   if (churn_)
     TickChurn();
+
+  TickBlockCapture();
 
   int cw = 0, ch = 0;
   ClientSize(&cw, &ch);
@@ -474,6 +590,9 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
     case VK_F6:
       OnHotkeyChurn();
+      return 0;
+    case VK_F7:
+      OnHotkeyBlockToggle();
       return 0;
     default:
       break;

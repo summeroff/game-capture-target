@@ -39,8 +39,12 @@ private:
   void OnHotkeyRecreateDevice();
   void OnHotkeyTitle();
   void OnHotkeyChurn();
+  void OnHotkeyBlockToggle();
 
   void TickChurn();
+  void TickBlockCapture();
+  bool ApplyBlockNow(std::wstring* error);
+  void LiftReversibleBlock();
   void Frame();
   void RequestQuit();
 
@@ -56,6 +60,11 @@ private:
   int titleCounter_ = 0;
   int resizeToggle_ = 0;
 
+  bool blockActive_ = false;
+  bool blockPending_ = false;
+  bool unloadHookArmed_ = false;
+  BlockCaptureMode reversibleMode_ = BlockCaptureMode::None;
+
   uint64_t frameIndex_ = 0;
   double elapsedSec_ = 0.0;
   LARGE_INTEGER qpcFreq_{};
@@ -63,7 +72,6 @@ private:
   LARGE_INTEGER qpcLast_{};
   double frameBudgetSec_ = 1.0 / 60.0;
 
-  // Remember windowed placement when leaving windowed mode.
   WINDOWPLACEMENT windowedPlacement_{};
   int windowedW_ = 1280;
   int windowedH_ = 720;
