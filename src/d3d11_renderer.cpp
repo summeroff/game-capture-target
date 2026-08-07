@@ -25,7 +25,8 @@ constexpr char kShaderSrc[] = R"(
 cbuffer CB : register(b0)
 {
     float4x4 uTransform;
-    float4   uColor;
+    float4   uColor;    // rgb + alpha multiplier
+    float4   uTimeRes;  // x=time sec, y=width, z=height, w=mode (0 solid,1 unused)
 };
 
 struct VSIn {
@@ -51,9 +52,93 @@ VSOut VSMain(VSIn i)
 Texture2D    gTex : register(t0);
 SamplerState gSamp : register(s0);
 
+float3 hsv2rgb(float h, float s, float v)
+{
+    float3 p = abs(frac(h + float3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0);
+    return v * lerp(float3(1,1,1), saturate(p - 1.0), s);
+}
+
+// Fullscreen procedural backdrop — aurora + soft tunnel + twinkles.
+float4 PSBackground(VSOut i) : SV_Target
+{
+    float t = uTimeRes.x;
+    float2 uv = i.uv;
+    float2 p = uv * 2.0 - 1.0;
+    p.x *= uTimeRes.y / max(uTimeRes.z, 1.0);
+
+    float r = length(p);
+    float ang = atan2(p.y, p.x);
+
+    // Deep space base
+    float3 col = float3(0.015, 0.01, 0.04);
+
+    // Slow color nebula
+    float n1 = sin(p.x * 3.1 + t * 0.35) * cos(p.y * 2.7 - t * 0.28);
+    float n2 = sin((p.x + p.y) * 4.2 - t * 0.55) * 0.5;
+    float n3 = cos(p.x * 1.7 - p.y * 2.3 + t * 0.2);
+    float neb = saturate(0.55 + 0.45 * (n1 + n2 * 0.7 + n3 * 0.4));
+    col += hsv2rgb(frac(0.62 + t * 0.02 + neb * 0.15), 0.65, 0.22) * neb;
+
+    // Aurora curtains
+    float wave = sin(p.x * 2.5 + t * 0.9) * 0.25
+               + sin(p.x * 5.0 - t * 1.4) * 0.12
+               + sin(p.x * 0.8 + t * 0.3) * 0.35;
+    float ay = p.y + wave * 0.45;
+    float band = exp(-pow(ay * 2.2, 2.0)) * (0.55 + 0.45 * sin(p.x * 3.0 + t));
+    float band2 = exp(-pow((ay + 0.35) * 2.8, 2.0)) * (0.4 + 0.4 * cos(p.x * 4.0 - t * 1.2));
+    col += float3(0.05, 0.55, 0.35) * band * 0.85;
+    col += float3(0.35, 0.15, 0.75) * band2 * 0.7;
+    col += float3(0.9, 0.35, 0.55) * band * band2 * 1.2;
+
+    // Hyperspace rings (frozen capture = rings stop)
+    float rings = abs(sin(12.0 / max(r, 0.08) - t * 3.5 + ang * 2.0));
+    rings = pow(rings, 8.0) * smoothstep(1.4, 0.05, r);
+    col += hsv2rgb(frac(ang / 6.28318 + t * 0.1), 0.8, 1.0) * rings * 0.55;
+
+    // Twinkling star field (hash-ish)
+    float2 gv = floor(uv * float2(48.0, 27.0));
+    float2 gu = frac(uv * float2(48.0, 27.0)) - 0.5;
+    float rnd = frac(sin(dot(gv, float2(127.1, 311.7))) * 43758.5453);
+    float tw = step(0.92, rnd) * smoothstep(0.2, 0.0, length(gu));
+    tw *= 0.5 + 0.5 * sin(t * (6.0 + rnd * 20.0) + rnd * 30.0);
+    col += tw * (0.6 + 0.4 * rnd);
+
+    // Vignette
+    col *= 1.0 - smoothstep(0.55, 1.35, r) * 0.65;
+
+    // Subtle scanline shimmer so 1-frame freezes read as "stuck"
+    col *= 0.92 + 0.08 * sin(uv.y * uTimeRes.z * 3.14159 + t * 40.0);
+
+    return float4(col, 1.0);
+}
+
 float4 PSSolid(VSOut i) : SV_Target
 {
     return i.col;
+}
+
+// Soft circular orb / particle (unit quad UV 0..1).
+float4 PSOrb(VSOut i) : SV_Target
+{
+    float2 p = i.uv * 2.0 - 1.0;
+    float d = length(p);
+    float core = saturate(1.0 - d * 1.15);
+    float glow = saturate(1.0 - d);
+    float a = core * core * core + glow * glow * 0.35;
+    a *= i.col.a;
+    float3 c = i.col.rgb * (0.55 + 0.45 * core);
+    return float4(c, a);
+}
+
+// Ring / hollow disc
+float4 PSRing(VSOut i) : SV_Target
+{
+    float2 p = i.uv * 2.0 - 1.0;
+    float d = length(p);
+    float ring = 1.0 - abs(d - 0.72) * 6.0;
+    float a = saturate(ring);
+    a = a * a * i.col.a;
+    return float4(i.col.rgb, a);
 }
 
 float4 PSText(VSOut i) : SV_Target
@@ -71,6 +156,7 @@ struct Vertex {
 struct CBData {
   float transform[16];
   float color[4];
+  float timeRes[4];
 };
 
 void MatIdentity(float* m)
@@ -173,6 +259,11 @@ public:
     vs_.Reset();
     psSolid_.Reset();
     psText_.Reset();
+    psBg_.Reset();
+    psOrb_.Reset();
+    psRing_.Reset();
+    blend_.Reset();
+    blendAdd_.Reset();
     ctx_.Reset();
     device_.Reset();
   }
@@ -263,13 +354,12 @@ public:
     if (!ctx_ || !rtv_)
       return;
 
-    // Cycling clear color — frozen capture is obvious.
     const float t = static_cast<float>(info.elapsedSec);
-    const float r = 0.12f + 0.12f * std::sin(t * 1.7f);
-    const float g = 0.10f + 0.10f * std::sin(t * 1.3f + 2.0f);
-    const float b = 0.18f + 0.14f * std::sin(t * 2.1f + 4.0f);
-    const float clear[4] = {r, g, b, 1.f};
+    timeSec_ = t;
+
     ctx_->OMSetRenderTargets(1, rtv_.GetAddressOf(), nullptr);
+    // Background shader paints everything; clear is a safety net.
+    const float clear[4] = {0.01f, 0.01f, 0.03f, 1.f};
     ctx_->ClearRenderTargetView(rtv_.Get(), clear);
 
     D3D11_VIEWPORT vp{};
@@ -285,41 +375,124 @@ public:
     UINT offset = 0;
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
     ctx_->VSSetShader(vs_.Get(), nullptr, 0);
-    ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
     ctx_->PSSetSamplers(0, 1, samp_.GetAddressOf());
 
-    // Rotating + translating colored quad.
-    const float cx = width_ * 0.5f;
-    const float cy = height_ * 0.5f;
-    const float orbit = 120.f + 40.f * std::sin(t * 0.8f);
-    const float ox = cx + std::cos(t * 1.4f) * orbit;
-    const float oy = cy + std::sin(t * 1.4f) * orbit * 0.55f;
-    const float ang = t * 2.2f;
-    const float qs = 90.f + 20.f * std::sin(t * 3.0f);
-
-    float ortho[16], rot[16], scl[16], tr[16], tmp[16], world[16], mvp[16];
+    float ortho[16];
     MatOrthoPixels(ortho, static_cast<float>(width_), static_cast<float>(height_));
-    MatRotateZ(rot, ang);
-    MatScale(scl, qs, qs);
-    MatTranslate(tr, ox, oy);
-    MatMul(tmp, rot, scl);
-    MatMul(world, tr, tmp);
-    MatMul(mvp, ortho, world);
 
-    const float qr = 0.55f + 0.45f * std::sin(t * 3.5f);
-    const float qg = 0.55f + 0.45f * std::sin(t * 3.5f + 2.1f);
-    const float qb = 0.55f + 0.45f * std::sin(t * 3.5f + 4.2f);
-    DrawUnitQuad(mvp, qr, qg, qb, 1.f);
+    // --- Fullscreen procedural backdrop ---
+    {
+      float scl[16], tr[16], world[16], mvp[16];
+      MatScale(scl, static_cast<float>(width_), static_cast<float>(height_));
+      MatTranslate(tr, width_ * 0.5f, height_ * 0.5f);
+      MatMul(world, tr, scl);
+      MatMul(mvp, ortho, world);
+      const float blendFactor[4] = {0, 0, 0, 0};
+      ctx_->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psBg_.Get(), nullptr, 0);
+      UpdateCB(mvp, 1, 1, 1, 1);
+      ctx_->Draw(6, 0);
+    }
 
-    // Large frame counter (center-top-ish) via bitmap font.
+    const float cx = width_ * 0.5f;
+    const float cy = height_ * 0.55f;
+    const float blendFactor[4] = {0, 0, 0, 0};
+    ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+
+    // --- Outer spinning ring of orbs ---
+    ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
+    constexpr int kOrbs = 14;
+    for (int i = 0; i < kOrbs; ++i) {
+      const float a0 = t * 0.7f + i * (6.2831853f / kOrbs);
+      const float radius = 180.f + 40.f * std::sin(t * 1.1f + i * 0.4f);
+      const float ox = cx + std::cos(a0) * radius;
+      const float oy = cy + std::sin(a0) * radius * 0.62f;
+      const float sz = 28.f + 10.f * std::sin(t * 3.0f + i);
+      const float hue = std::fmod(t * 0.08f + i / float(kOrbs), 1.f);
+      float rr, gg, bb;
+      Hsv(hue, 0.85f, 1.f, &rr, &gg, &bb);
+      DrawTransformed(ortho, ox, oy, 0.f, sz, sz, rr, gg, bb, 0.9f);
+    }
+
+    // --- Counter-rotating inner ring ---
+    for (int i = 0; i < 8; ++i) {
+      const float a0 = -t * 1.3f + i * (6.2831853f / 8);
+      const float radius = 90.f + 18.f * std::cos(t * 2.0f + i);
+      const float ox = cx + std::cos(a0) * radius;
+      const float oy = cy + std::sin(a0) * radius * 0.7f;
+      float rr, gg, bb;
+      Hsv(std::fmod(0.45f + i * 0.08f + t * 0.05f, 1.f), 0.7f, 1.f, &rr, &gg, &bb);
+      DrawTransformed(ortho, ox, oy, 0.f, 18.f, 18.f, rr, gg, bb, 0.85f);
+    }
+
+    // --- Big soft rings ---
+    ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
+    for (int i = 0; i < 3; ++i) {
+      const float pulse = 1.f + 0.12f * std::sin(t * 2.5f + i);
+      const float sz = (220.f + i * 90.f) * pulse;
+      float rr, gg, bb;
+      Hsv(std::fmod(0.55f + i * 0.12f + t * 0.03f, 1.f), 0.8f, 1.f, &rr, &gg, &bb);
+      DrawTransformed(ortho, cx, cy, t * (0.4f + i * 0.2f), sz, sz * 0.7f, rr, gg, bb, 0.35f);
+    }
+
+    // --- Comet: bright orb + trailing ghosts ---
+    ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
+    {
+      const float ca = t * 1.15f;
+      const float cr = 250.f + 60.f * std::sin(t * 0.6f);
+      const float cox = cx + std::cos(ca) * cr;
+      const float coy = cy + std::sin(ca) * cr * 0.5f;
+      for (int trail = 7; trail >= 0; --trail) {
+        const float ta = ca - trail * 0.08f;
+        const float trr = cr - trail * 6.f;
+        const float tx = cx + std::cos(ta) * trr;
+        const float ty = cy + std::sin(ta) * trr * 0.5f;
+        const float sz = 42.f - trail * 4.f;
+        const float al = 0.95f - trail * 0.1f;
+        float rr, gg, bb;
+        Hsv(std::fmod(0.08f + trail * 0.02f + t * 0.1f, 1.f), 0.9f, 1.f, &rr, &gg, &bb);
+        DrawTransformed(ortho, tx, ty, 0.f, sz, sz, rr, gg, bb, al);
+      }
+      DrawTransformed(ortho, cox, coy, 0.f, 56.f, 56.f, 1.f, 0.95f, 0.8f, 1.f);
+    }
+
+    // --- Audio-style bars along the bottom (purely visual) ---
+    ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+    ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+    constexpr int kBars = 48;
+    const float barW = width_ / float(kBars);
+    for (int i = 0; i < kBars; ++i) {
+      const float n = 0.5f + 0.5f * std::sin(t * 4.0f + i * 0.45f) *
+                                 std::cos(t * 2.3f + i * 0.17f);
+      const float h = (30.f + n * (height_ * 0.22f));
+      const float bx = (i + 0.5f) * barW;
+      const float by = height_ - h * 0.5f - 8.f;
+      float rr, gg, bb;
+      Hsv(std::fmod(i / float(kBars) + t * 0.15f, 1.f), 0.85f, 1.f, &rr, &gg, &bb);
+      DrawTransformed(ortho, bx, by, 0.f, barW * 0.72f, h, rr, gg, bb, 0.75f);
+    }
+
+    // --- Spinning diamond core ---
+    {
+      const float ang = t * 1.8f;
+      const float sz = 70.f + 15.f * std::sin(t * 4.0f);
+      float rr, gg, bb;
+      Hsv(std::fmod(t * 0.2f, 1.f), 0.6f, 1.f, &rr, &gg, &bb);
+      DrawTransformed(ortho, cx, cy, ang, sz, sz, rr, gg, bb, 0.9f);
+      DrawTransformed(ortho, cx, cy, ang + 0.785f, sz * 0.55f, sz * 0.55f, 1.f, 1.f, 1.f, 0.7f);
+    }
+
+    // Large frame counter — still the capture-liveness tell.
     if (!info.noHud) {
+      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
       char big[32];
       sprintf_s(big, "%llu", static_cast<unsigned long long>(info.frameIndex));
-      const float scale = 6.f;
+      const float scale = 7.f;
       const float tw = static_cast<float>(std::strlen(big)) * font8x8::kGlyphW * scale;
-      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.18f, scale, 1.f, 1.f, 0.2f, 1.f);
+      // Soft shadow then bright glyph
+      DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.12f + 3.f, scale, 0.f, 0.f, 0.f, 0.55f);
+      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.12f, scale, 1.f, 0.95f, 0.35f, 1.f);
 
-      // HUD block top-left.
       char line[256];
       std::vector<std::string> lines;
       sprintf_s(line, "frame  %llu", static_cast<unsigned long long>(info.frameIndex));
@@ -342,12 +515,13 @@ public:
       lines.emplace_back(line);
       sprintf_s(line, "time   %.2fs", info.elapsedSec);
       lines.emplace_back(line);
-      sprintf_s(line, "hotkeys F1 mode F2 resize F3 swap F4 device F5 title F6 churn Esc quit");
+      sprintf_s(line, "hotkeys F1-F7 / Esc");
       lines.emplace_back(line);
 
       float y = 8.f;
       for (const auto& s : lines) {
-        DrawTextPx(s.c_str(), 8.f, y, 2.f, 0.95f, 0.95f, 0.95f, 1.f);
+        DrawTextPx(s.c_str(), 9.f, y + 1.f, 2.f, 0.f, 0.f, 0.f, 0.65f);
+        DrawTextPx(s.c_str(), 8.f, y, 2.f, 0.92f, 0.95f, 1.f, 1.f);
         y += font8x8::kGlyphH * 2.f + 4.f;
       }
     }
@@ -553,7 +727,7 @@ private:
 
   bool CreatePipeline(std::wstring* error)
   {
-    ComPtr<ID3DBlob> vsBlob, psSolidBlob, psTextBlob, errBlob;
+    ComPtr<ID3DBlob> vsBlob, psSolidBlob, psTextBlob, psBgBlob, psOrbBlob, psRingBlob, errBlob;
     UINT cflags = D3DCOMPILE_ENABLE_STRICTNESS;
 #if defined(_DEBUG)
     cflags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
@@ -583,6 +757,12 @@ private:
       return false;
     if (!compile("PSText", "ps_4_0", psTextBlob))
       return false;
+    if (!compile("PSBackground", "ps_4_0", psBgBlob))
+      return false;
+    if (!compile("PSOrb", "ps_4_0", psOrbBlob))
+      return false;
+    if (!compile("PSRing", "ps_4_0", psRingBlob))
+      return false;
 
     HRESULT hr = device_->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
                                              nullptr, &vs_);
@@ -600,6 +780,24 @@ private:
                                     nullptr, &psText_);
     if (FAILED(hr)) {
       *error = L"CreatePixelShader text failed";
+      return false;
+    }
+    hr = device_->CreatePixelShader(psBgBlob->GetBufferPointer(), psBgBlob->GetBufferSize(), nullptr,
+                                    &psBg_);
+    if (FAILED(hr)) {
+      *error = L"CreatePixelShader bg failed";
+      return false;
+    }
+    hr = device_->CreatePixelShader(psOrbBlob->GetBufferPointer(), psOrbBlob->GetBufferSize(),
+                                    nullptr, &psOrb_);
+    if (FAILED(hr)) {
+      *error = L"CreatePixelShader orb failed";
+      return false;
+    }
+    hr = device_->CreatePixelShader(psRingBlob->GetBufferPointer(), psRingBlob->GetBufferSize(),
+                                    nullptr, &psRing_);
+    if (FAILED(hr)) {
+      *error = L"CreatePixelShader ring failed";
       return false;
     }
 
@@ -654,7 +852,7 @@ private:
       return false;
     }
 
-    // Alpha blend for text.
+    // Alpha blend for text / solid bars.
     D3D11_BLEND_DESC bl{};
     bl.RenderTarget[0].BlendEnable = TRUE;
     bl.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
@@ -667,6 +865,18 @@ private:
     hr = device_->CreateBlendState(&bl, &blend_);
     if (FAILED(hr)) {
       *error = L"CreateBlendState failed";
+      return false;
+    }
+
+    // Additive for glowing orbs / rings.
+    D3D11_BLEND_DESC ba = bl;
+    ba.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    ba.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+    ba.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    ba.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+    hr = device_->CreateBlendState(&ba, &blendAdd_);
+    if (FAILED(hr)) {
+      *error = L"CreateBlendState additive failed";
       return false;
     }
 
@@ -728,12 +938,15 @@ private:
     if (FAILED(ctx_->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
       return;
     auto* cb = static_cast<CBData*>(map.pData);
-    // HLSL float4x4 is column-major; our mats are column-major already.
     std::memcpy(cb->transform, mvp, 16 * sizeof(float));
     cb->color[0] = r;
     cb->color[1] = g;
     cb->color[2] = b;
     cb->color[3] = a;
+    cb->timeRes[0] = timeSec_;
+    cb->timeRes[1] = static_cast<float>(width_);
+    cb->timeRes[2] = static_cast<float>(height_);
+    cb->timeRes[3] = 0.f;
     ctx_->Unmap(cb_.Get(), 0);
     ctx_->VSSetConstantBuffers(0, 1, cb_.GetAddressOf());
     ctx_->PSSetConstantBuffers(0, 1, cb_.GetAddressOf());
@@ -742,10 +955,62 @@ private:
   void DrawUnitQuad(const float* mvp, float r, float g, float b, float a)
   {
     UpdateCB(mvp, r, g, b, a);
-    const float blendFactor[4] = {0, 0, 0, 0};
-    ctx_->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
-    ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
     ctx_->Draw(6, 0);
+  }
+
+  void DrawTransformed(const float* ortho, float x, float y, float rot, float sx, float sy, float r,
+                       float g, float b, float a)
+  {
+    float R[16], S[16], T[16], tmp[16], world[16], mvp[16];
+    MatRotateZ(R, rot);
+    MatScale(S, sx, sy);
+    MatTranslate(T, x, y);
+    MatMul(tmp, R, S);
+    MatMul(world, T, tmp);
+    MatMul(mvp, ortho, world);
+    DrawUnitQuad(mvp, r, g, b, a);
+  }
+
+  static void Hsv(float h, float s, float v, float* r, float* g, float* b)
+  {
+    h = h - std::floor(h);
+    const float i = std::floor(h * 6.f);
+    const float f = h * 6.f - i;
+    const float p = v * (1.f - s);
+    const float q = v * (1.f - f * s);
+    const float t = v * (1.f - (1.f - f) * s);
+    switch (static_cast<int>(i) % 6) {
+    case 0:
+      *r = v;
+      *g = t;
+      *b = p;
+      break;
+    case 1:
+      *r = q;
+      *g = v;
+      *b = p;
+      break;
+    case 2:
+      *r = p;
+      *g = v;
+      *b = t;
+      break;
+    case 3:
+      *r = p;
+      *g = q;
+      *b = v;
+      break;
+    case 4:
+      *r = t;
+      *g = p;
+      *b = v;
+      break;
+    default:
+      *r = v;
+      *g = p;
+      *b = q;
+      break;
+    }
   }
 
   void DrawTextPx(const char* text, float x, float y, float scale, float r, float g, float b, float a)
@@ -833,6 +1098,7 @@ private:
   UINT swapFlags_ = 0;
   int atlasW_ = 0;
   int atlasH_ = 0;
+  float timeSec_ = 0.f;
 
   ComPtr<ID3D11Device> device_;
   ComPtr<ID3D11DeviceContext> ctx_;
@@ -843,12 +1109,16 @@ private:
   ComPtr<ID3D11VertexShader> vs_;
   ComPtr<ID3D11PixelShader> psSolid_;
   ComPtr<ID3D11PixelShader> psText_;
+  ComPtr<ID3D11PixelShader> psBg_;
+  ComPtr<ID3D11PixelShader> psOrb_;
+  ComPtr<ID3D11PixelShader> psRing_;
   ComPtr<ID3D11InputLayout> layout_;
   ComPtr<ID3D11Buffer> vb_;
   ComPtr<ID3D11Buffer> dynVb_;
   ComPtr<ID3D11Buffer> cb_;
   ComPtr<ID3D11SamplerState> samp_;
   ComPtr<ID3D11BlendState> blend_;
+  ComPtr<ID3D11BlendState> blendAdd_;
   ComPtr<ID3D11Texture2D> fontTex_;
   ComPtr<ID3D11ShaderResourceView> fontSrv_;
 };
