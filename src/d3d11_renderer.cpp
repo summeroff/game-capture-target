@@ -448,17 +448,25 @@ public:
           sd ? sd->flashA : 0.f);
     }
 
-    // HUD
+    // HUD — opaque panel first so text always reads on dark scenes.
     if (!info.noHud)
     {
-      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      const float blendFactorHud[4] = {0, 0, 0, 0};
+      // Disable blend for solid panel (fully opaque).
+      ctx_->OMSetBlendState(nullptr, blendFactorHud, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      // Left info plate
+      DrawTransformed(ortho, 210.f, 175.f, 0.f, 400.f, 340.f, 0.02f, 0.04f, 0.08f, 1.f);
+      // Restore alpha blend for glyphs
+      ctx_->OMSetBlendState(blend_.Get(), blendFactorHud, 0xFFFFFFFF);
+
       char big[32];
       sprintf_s(big, "%llu", static_cast<unsigned long long>(info.frameIndex));
       const float scale = 7.f;
       const float tw = static_cast<float>(std::strlen(big)) * font8x8::kGlyphW * scale;
-      DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.12f + 3.f, scale, 0.f, 0.f, 0.f,
+      DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.08f + 3.f, scale, 0.f, 0.f, 0.f,
                  0.55f);
-      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.12f, scale, 1.f, 0.95f, 0.35f, 1.f);
+      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.08f, scale, 1.f, 0.95f, 0.35f, 1.f);
 
       char line[256];
       std::vector<std::string> lines;
@@ -507,9 +515,15 @@ public:
       float y = 8.f;
       for (const auto& s : lines)
       {
-        DrawTextPx(s.c_str(), 9.f, y + 1.f, 2.f, 0.f, 0.f, 0.f, 0.65f);
-        DrawTextPx(s.c_str(), 8.f, y, 2.f, 0.92f, 0.95f, 1.f, 1.f);
+        DrawTextPx(s.c_str(), 9.f, y + 1.f, 2.f, 0.f, 0.f, 0.f, 0.9f);
+        DrawTextPx(s.c_str(), 8.f, y, 2.f, 0.95f, 0.98f, 1.f, 1.f);
         y += font8x8::kGlyphH * 2.f + 4.f;
+      }
+
+      if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
+      {
+        Log("d3d11-hud: lines=%d panel=1 textScale=2 bigFrame=%s", static_cast<int>(lines.size()),
+            big);
       }
     }
 
@@ -1030,14 +1044,12 @@ private:
 
   void DrawTriangle(const float* ortho, const scene::Prim& p)
   {
-    // Isosceles triangle in local space: tip at (0,-h/2) before rotation?
-    // Tip along +rot axis (screen: rot=0 points +X). Local tip at (+h/2,0), base at -h/2.
+    // Isosceles: tip along +rot (screen +X when rot=0).
     EnsureDynVb();
     const float cs = std::cos(p.rot);
     const float sn = std::sin(p.rot);
     const float halfB = p.w * 0.5f;
     const float halfH = p.h * 0.5f;
-    // Local verts: tip, base-left, base-right
     const float lx[3] = {halfH, -halfH, -halfH};
     const float ly[3] = {0.f, -halfB, halfB};
     Vertex verts[6];
@@ -1049,8 +1061,7 @@ private:
     put(0, lx[0], ly[0]);
     put(1, lx[1], ly[1]);
     put(2, lx[2], ly[2]);
-    // Degenerate second tri unused — draw 3 verts only via topology; we keep triangle list of 1 tri.
-    // Use 3 verts: upload 3, but unit path draws 6. Upload triangle twice as degenerate quad? Better: draw 3.
+    // Duplicate as second tri so Draw(6) works if a caller expects quads.
     verts[3] = verts[0];
     verts[4] = verts[2];
     verts[5] = verts[1];
@@ -1058,26 +1069,30 @@ private:
     D3D11_MAPPED_SUBRESOURCE map{};
     if (FAILED(ctx_->Map(dynVb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
       return;
-    std::memcpy(map.pData, verts, sizeof(Vertex) * 3);
+    std::memcpy(map.pData, verts, sizeof(verts));
     ctx_->Unmap(dynVb_.Get(), 0);
 
     UINT stride = sizeof(Vertex);
     UINT offset = 0;
     ctx_->IASetVertexBuffers(0, 1, dynVb_.GetAddressOf(), &stride, &offset);
 
-    // Identity world — verts already in pixels; only ortho.
     float mvp[16];
     std::memcpy(mvp, ortho, sizeof(float) * 16);
     UpdateCB(mvp, p.r, p.g, p.b, p.a);
     ctx_->Draw(3, 0);
 
-    // Restore unit VB
+    // Restore unit VB for subsequent solid/orb/ring draws.
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
   }
 
   void DrawTransformed(const float* ortho, float x, float y, float rot, float sx, float sy, float r,
                        float g, float b, float a)
   {
+    // Always bind the unit quad VB — triangle path may have left dynVb bound.
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
+
     float R[16], S[16], T[16], tmp[16], world[16], mvp[16];
     MatRotateZ(R, rot);
     MatScale(S, sx, sy);
