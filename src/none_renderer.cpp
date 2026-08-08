@@ -3,6 +3,7 @@
 #include "font8x8.hpp"
 #include "log.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -117,14 +118,13 @@ public:
       if (sd->flashA > 0.05f)
       {
         // Approximate flash with a translucent-ish solid (GDI has no true alpha blend easily).
-        const int fa = int(sd->flashA * 120.f);
+        // flashA scales stripe density: higher alpha → denser horizontal lines.
+        const int step = (std::max)(2, 8 - int(sd->flashA * 6.f));
         HBRUSH flash = CreateSolidBrush(
             RGB(int(sd->flashR * 255.f), int(sd->flashG * 255.f), int(sd->flashB * 255.f)));
-        // Stipple-ish: draw horizontal stripes
-        for (int y = 0; y < h; y += 4)
+        for (int y = 0; y < h; y += step)
         {
           RECT fr{0, y, w, y + 1};
-          (void)fa;
           FillRect(mem, &fr, flash);
         }
         DeleteObject(flash);
@@ -220,9 +220,8 @@ private:
     const COLORREF col = RgbF(p.r, p.g, p.b);
     switch (p.kind)
     {
-    case scene::PrimKind::QuadOrb:
-    case scene::PrimKind::CircleOutline: {
-      const float rad = (p.kind == scene::PrimKind::CircleOutline) ? p.w : (p.w * 0.5f);
+    case scene::PrimKind::QuadOrb: {
+      const float rad = p.w * 0.5f;
       HBRUSH br = CreateSolidBrush(col);
       HGDIOBJ ob = SelectObject(mem, br);
       HPEN np = (HPEN)GetStockObject(NULL_PEN);
@@ -233,13 +232,30 @@ private:
       DeleteObject(br);
       break;
     }
+    case scene::PrimKind::CircleOutline: {
+      // Outline only: radius=w, thickness≈h (pixels).
+      const float rad = (std::max)(p.w, 1.f);
+      int thick = int(p.h + 0.5f);
+      if (thick < 1)
+        thick = 1;
+      HPEN pen = CreatePen(PS_SOLID, thick, col);
+      HGDIOBJ op = SelectObject(mem, pen);
+      HGDIOBJ ob = SelectObject(mem, GetStockObject(NULL_BRUSH));
+      Ellipse(mem, int(p.x - rad), int(p.y - rad), int(p.x + rad), int(p.y + rad));
+      SelectObject(mem, ob);
+      SelectObject(mem, op);
+      DeleteObject(pen);
+      break;
+    }
     case scene::PrimKind::QuadRing: {
-      const float rad = p.w * 0.5f;
+      const float ww = (std::max)(p.w, 1.f);
+      const float hh = (std::max)(p.h, 1.f);
+      const float radX = ww * 0.5f;
+      const float radY = hh * 0.5f;
       HPEN pen = CreatePen(PS_SOLID, 2, col);
       HGDIOBJ op = SelectObject(mem, pen);
       HGDIOBJ ob = SelectObject(mem, GetStockObject(NULL_BRUSH));
-      Ellipse(mem, int(p.x - rad), int(p.y - rad * (p.h / p.w)), int(p.x + rad),
-              int(p.y + rad * (p.h / std::max(p.w, 1.f))));
+      Ellipse(mem, int(p.x - radX), int(p.y - radY), int(p.x + radX), int(p.y + radY));
       SelectObject(mem, ob);
       SelectObject(mem, op);
       DeleteObject(pen);

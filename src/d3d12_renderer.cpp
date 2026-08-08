@@ -153,8 +153,15 @@ public:
     pipelineText_.Reset();
     rootSig_.Reset();
     vb_.Reset();
-    cb_[0].Reset();
-    cb_[1].Reset();
+    for (UINT i = 0; i < kFrameCount; ++i)
+    {
+      if (cbMapped_[i] && cb_[i])
+      {
+        cb_[i]->Unmap(0, nullptr);
+        cbMapped_[i] = nullptr;
+      }
+      cb_[i].Reset();
+    }
     fontTex_.Reset();
     fontUpload_.Reset();
     srvHeap_.Reset();
@@ -770,6 +777,15 @@ private:
         return false;
       }
       cbGpu_[i] = cb_[i]->GetGPUVirtualAddress();
+      // Persistently map upload CB — write slots each frame without Map/Unmap churn.
+      void* mapped = nullptr;
+      hr = cb_[i]->Map(0, nullptr, &mapped);
+      if (FAILED(hr) || !mapped)
+      {
+        *error = L"Map CB failed";
+        return false;
+      }
+      cbMapped_[i] = static_cast<uint8_t*>(mapped);
     }
     return true;
   }
@@ -778,16 +794,16 @@ private:
   {
     if (slot >= kMaxCbSlots)
       return;
+    uint8_t* base = cbMapped_[fi];
+    if (!base)
+      return;
     constexpr UINT kCbAlign = 256;
-    uint8_t* base = nullptr;
-    cb_[fi]->Map(0, nullptr, reinterpret_cast<void**>(&base));
     auto* p = reinterpret_cast<CBData*>(base + slot * kCbAlign);
     memcpy(p->transform, mvp, 16 * sizeof(float));
     p->color[0] = r;
     p->color[1] = g;
     p->color[2] = b;
     p->color[3] = a;
-    cb_[fi]->Unmap(0, nullptr);
   }
 
   void DrawSolidXform(UINT fi, const float* ortho, float x, float y, float rot, float sx, float sy,
@@ -955,6 +971,7 @@ private:
   HANDLE fenceEvent_ = nullptr;
   D3D12_VERTEX_BUFFER_VIEW vbView_{};
   D3D12_GPU_VIRTUAL_ADDRESS cbGpu_[kFrameCount]{};
+  uint8_t* cbMapped_[kFrameCount]{};
 
   ComPtr<IDXGIFactory4> factory_;
   ComPtr<ID3D12Device> device_;

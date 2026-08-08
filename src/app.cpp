@@ -492,7 +492,17 @@ void App::Frame()
     if (cw > 0 && ch > 0)
       scene_->Resize(cw, ch);
     scene_->Update(elapsedSec_, lastDt_, cw > 0 ? cw : cfg_.width, ch > 0 ? ch : cfg_.height);
-    sceneDraw_ = scene::SceneDraw{};
+    // Keep prims capacity; only reset draw-list payload fields.
+    sceneDraw_.backdrop = scene::BackdropId::Aurora;
+    sceneDraw_.clearR = 0.01f;
+    sceneDraw_.clearG = 0.01f;
+    sceneDraw_.clearB = 0.03f;
+    sceneDraw_.flashR = 1.f;
+    sceneDraw_.flashG = 0.55f;
+    sceneDraw_.flashB = 0.2f;
+    sceneDraw_.flashA = 0.f;
+    sceneDraw_.hud = {};
+    sceneDraw_.prims.clear();
     scene_->Emit(sceneDraw_);
   }
 
