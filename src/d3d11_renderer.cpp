@@ -44,7 +44,9 @@ struct VSOut {
 VSOut VSMain(VSIn i)
 {
     VSOut o;
-    o.pos = mul(float4(i.pos, 0.0f, 1.0f), uTransform);
+    // Column-vector convention: CPU builds M for p' = M * p (column-major).
+    // Must be mul(M, v) — mul(v, M) drops translation and pins every prim at screen center.
+    o.pos = mul(uTransform, float4(i.pos, 0.0f, 1.0f));
     o.uv  = i.uv;
     o.col = uColor;
     return o;
@@ -270,6 +272,7 @@ public:
     psRing_.Reset();
     blend_.Reset();
     blendAdd_.Reset();
+    raster_.Reset();
     ctx_.Reset();
     device_.Reset();
   }
@@ -392,6 +395,8 @@ public:
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
     ctx_->VSSetShader(vs_.Get(), nullptr, 0);
     ctx_->PSSetSamplers(0, 1, samp_.GetAddressOf());
+    if (raster_)
+      ctx_->RSSetState(raster_.Get());
 
     float ortho[16];
     MatOrthoPixels(ortho, static_cast<float>(width_), static_cast<float>(height_));
@@ -448,82 +453,82 @@ public:
           sd ? sd->flashA : 0.f);
     }
 
-    // HUD — opaque panel first so text always reads on dark scenes.
+    // HUD — compact top-left plate (never a giant center block).
     if (!info.noHud)
     {
       const float blendFactorHud[4] = {0, 0, 0, 0};
-      // Disable blend for solid panel (fully opaque).
-      ctx_->OMSetBlendState(nullptr, blendFactorHud, 0xFFFFFFFF);
-      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
-      // Left info plate
-      DrawTransformed(ortho, 210.f, 175.f, 0.f, 400.f, 340.f, 0.02f, 0.04f, 0.08f, 1.f);
-      // Restore alpha blend for glyphs
       ctx_->OMSetBlendState(blend_.Get(), blendFactorHud, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
 
       char big[32];
       sprintf_s(big, "%llu", static_cast<unsigned long long>(info.frameIndex));
-      const float scale = 7.f;
+      const float scale = 6.f;
       const float tw = static_cast<float>(std::strlen(big)) * font8x8::kGlyphW * scale;
-      DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.08f + 3.f, scale, 0.f, 0.f, 0.f,
-                 0.55f);
-      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.08f, scale, 1.f, 0.95f, 0.35f, 1.f);
 
       char line[256];
       std::vector<std::string> lines;
-      sprintf_s(line, "frame  %llu", static_cast<unsigned long long>(info.frameIndex));
+      // Keep on-screen HUD short; verbose prim tallies stay in logs.
+      sprintf_s(line, "frame %llu  %dx%d  %s", static_cast<unsigned long long>(info.frameIndex),
+                info.clientW, info.clientH, Narrow(ApiName()).c_str());
       lines.emplace_back(line);
-      sprintf_s(line, "size   %dx%d", info.clientW, info.clientH);
-      lines.emplace_back(line);
-      sprintf_s(line, "api    %s", Narrow(ApiName()).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "swap   %s", Narrow(SwapEffectName()).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "present %s", Narrow(PresentModeName()).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "mode   %s", Narrow(WindowModeName(info.mode)).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "scene  %s", Narrow(info.sceneName ? info.sceneName : L"?").c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "seed   0x%08X", info.sceneSeed);
+      sprintf_s(line, "scene %s  seed 0x%08X",
+                Narrow(info.sceneName ? info.sceneName : L"?").c_str(), info.sceneSeed);
       lines.emplace_back(line);
       {
         scene::PrimCounts pc{};
         if (sd)
           pc = scene::CountPrims(sd->prims);
-        sprintf_s(line, "draw   bg=%s auroraPS=%d prims=%d",
-                  Narrow(scene::BackdropIdName(bd)).c_str(), drewAuroraPs ? 1 : 0, drew);
+        sprintf_s(line, "draw bg=%s auroraPS=%d n=%d", Narrow(scene::BackdropIdName(bd)).c_str(),
+                  drewAuroraPs ? 1 : 0, drew);
         lines.emplace_back(line);
-        sprintf_s(line, "prims  s=%d o=%d r=%d l=%d t=%d c=%d", pc.solid, pc.orb, pc.ring, pc.line,
-                  pc.tri, pc.circle);
+        sprintf_s(line, "prims s%d o%d r%d l%d t%d", pc.solid, pc.orb, pc.ring, pc.line, pc.tri);
         lines.emplace_back(line);
       }
-      sprintf_s(line, "class  %s", Narrow(info.windowClass).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "title  %s", Narrow(info.windowTitle).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "pid    %lu", static_cast<unsigned long>(info.pid));
-      lines.emplace_back(line);
-      sprintf_s(line, "time   %.2fs", info.elapsedSec);
-      lines.emplace_back(line);
       if (sd && !sd->hud.line1.empty())
         lines.emplace_back(Narrow(sd->hud.line1));
       if (sd && !sd->hud.line2.empty())
         lines.emplace_back(Narrow(sd->hud.line2));
-      sprintf_s(line, "hotkeys F1-F7 / Esc");
+      sprintf_s(line, "F1-F7 Esc  t=%.1fs", info.elapsedSec);
       lines.emplace_back(line);
 
-      float y = 8.f;
+      const float textScale = 2.f;
+      const float lineH = font8x8::kGlyphH * textScale + 3.f;
+      const float plateH = 10.f + lineH * float(lines.size()) + 6.f;
+      const float plateW = 380.f;
+      // Pixel-space rect for plate (axis-aligned, top-left).
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      DrawPixelRect(ortho, 4.f, 4.f, 4.f + plateW, 4.f + plateH, 0.f, 0.f, 0.f, 0.62f);
+
+      DrawTextPx(big, (width_ - tw) * 0.5f + 2.f, height_ * 0.06f + 2.f, scale, 0.f, 0.f, 0.f,
+                 0.55f);
+      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.06f, scale, 1.f, 0.95f, 0.35f, 1.f);
+
+      float y = 10.f;
       for (const auto& s : lines)
       {
-        DrawTextPx(s.c_str(), 9.f, y + 1.f, 2.f, 0.f, 0.f, 0.f, 0.9f);
-        DrawTextPx(s.c_str(), 8.f, y, 2.f, 0.95f, 0.98f, 1.f, 1.f);
-        y += font8x8::kGlyphH * 2.f + 4.f;
+        DrawTextPx(s.c_str(), 13.f, y + 1.f, textScale, 0.f, 0.f, 0.f, 0.9f);
+        DrawTextPx(s.c_str(), 12.f, y, textScale, 0.95f, 0.98f, 1.f, 1.f);
+        y += lineH;
       }
 
       if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
       {
-        Log("d3d11-hud: lines=%d panel=1 textScale=2 bigFrame=%s", static_cast<int>(lines.size()),
-            big);
+        Log("d3d11-hud: lines=%d plate=%.0fx%.0f bigFrame=%s", static_cast<int>(lines.size()),
+            plateW, plateH, big);
+      }
+    }
+
+    // Optional framebuffer dump for visual QA (before Present).
+    if (info.dumpFramePath && !dumpedFrame_ && info.frameIndex >= 3)
+    {
+      if (DumpBackbufferBmp(info.dumpFramePath))
+      {
+        dumpedFrame_ = true;
+        Log("d3d11: dumped framebuffer to %s (%dx%d)", Narrow(info.dumpFramePath).c_str(), width_,
+            height_);
+      } else
+      {
+        Log("d3d11: dump-frame FAILED path=%s", Narrow(info.dumpFramePath).c_str());
       }
     }
 
@@ -910,6 +915,18 @@ private:
       return false;
     }
 
+    // 2D UI/scene: never cull (triangles may be CW or CCW depending on aim angle).
+    D3D11_RASTERIZER_DESC rd{};
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.DepthClipEnable = TRUE;
+    hr = device_->CreateRasterizerState(&rd, &raster_);
+    if (FAILED(hr))
+    {
+      *error = L"CreateRasterizerState failed";
+      return false;
+    }
+
     return true;
   }
 
@@ -970,8 +987,12 @@ private:
   void UpdateCB(const float* mvp, float r, float g, float b, float a)
   {
     D3D11_MAPPED_SUBRESOURCE map{};
-    if (FAILED(ctx_->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+    const HRESULT hr = ctx_->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
+    if (FAILED(hr))
+    {
+      Log("d3d11: Map CB FAILED hr=0x%08X", static_cast<unsigned>(hr));
       return;
+    }
     auto* cb = static_cast<CBData*>(map.pData);
     std::memcpy(cb->transform, mvp, 16 * sizeof(float));
     cb->color[0] = r;
@@ -989,6 +1010,14 @@ private:
 
   void DrawUnitQuad(const float* mvp, float r, float g, float b, float a)
   {
+    // Re-assert full IA state every draw — HUD path was producing center-screen
+    // triangles (identity NDC) when VB/topology got left wrong after dyn draws.
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx_->IASetInputLayout(layout_.Get());
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
+    ctx_->VSSetShader(vs_.Get(), nullptr, 0);
     UpdateCB(mvp, r, g, b, a);
     ctx_->Draw(6, 0);
   }
@@ -1085,10 +1114,37 @@ private:
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
   }
 
+  void DrawPixelRect(const float* ortho, float x0, float y0, float x1, float y1, float r, float g,
+                     float b, float a)
+  {
+    // Axis-aligned rect in pixel space (top-left origin). Avoids unit-quad path issues.
+    EnsureDynVb();
+    Vertex verts[6] = {
+        {x0, y0, 0.f, 0.f}, {x1, y0, 1.f, 0.f}, {x1, y1, 1.f, 1.f},
+        {x0, y0, 0.f, 0.f}, {x1, y1, 1.f, 1.f}, {x0, y1, 0.f, 1.f},
+    };
+    D3D11_MAPPED_SUBRESOURCE map{};
+    if (FAILED(ctx_->Map(dynVb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+      return;
+    std::memcpy(map.pData, verts, sizeof(verts));
+    ctx_->Unmap(dynVb_.Get(), 0);
+
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetVertexBuffers(0, 1, dynVb_.GetAddressOf(), &stride, &offset);
+
+    float mvp[16];
+    std::memcpy(mvp, ortho, 16 * sizeof(float));
+    UpdateCB(mvp, r, g, b, a);
+    ctx_->Draw(6, 0);
+
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
+  }
+
   void DrawTransformed(const float* ortho, float x, float y, float rot, float sx, float sy, float r,
                        float g, float b, float a)
   {
-    // Always bind the unit quad VB — triangle path may have left dynVb bound.
+    // Always bind the unit quad VB — triangle/text path may have left dynVb bound.
     UINT stride = sizeof(Vertex);
     UINT offset = 0;
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
@@ -1222,6 +1278,115 @@ private:
     device_->CreateBuffer(&bd, nullptr, &dynVb_);
   }
 
+  bool DumpBackbufferBmp(const wchar_t* path)
+  {
+    if (!device_ || !ctx_ || !backbuffer_ || !path || !*path)
+      return false;
+
+    D3D11_TEXTURE2D_DESC desc{};
+    backbuffer_->GetDesc(&desc);
+
+    D3D11_TEXTURE2D_DESC staging = desc;
+    staging.Usage = D3D11_USAGE_STAGING;
+    staging.BindFlags = 0;
+    staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    staging.MiscFlags = 0;
+    staging.MipLevels = 1;
+    staging.ArraySize = 1;
+    staging.SampleDesc.Count = 1;
+    staging.SampleDesc.Quality = 0;
+
+    ComPtr<ID3D11Texture2D> tex;
+    if (FAILED(device_->CreateTexture2D(&staging, nullptr, &tex)))
+      return false;
+
+    // Resolve MSAA if ever enabled; currently 1x so CopyResource is fine.
+    ctx_->CopyResource(tex.Get(), backbuffer_.Get());
+
+    D3D11_MAPPED_SUBRESOURCE map{};
+    if (FAILED(ctx_->Map(tex.Get(), 0, D3D11_MAP_READ, 0, &map)))
+      return false;
+
+    const int w = static_cast<int>(desc.Width);
+    const int h = static_cast<int>(desc.Height);
+    // BMP row pitch must be multiple of 4; 24bpp.
+    const int rowBytes = w * 3;
+    const int pad = (4 - (rowBytes % 4)) & 3;
+    const int stride = rowBytes + pad;
+    const int imgSize = stride * h;
+
+#pragma pack(push, 1)
+    struct BmpFileHeader
+    {
+      uint16_t bfType;
+      uint32_t bfSize;
+      uint16_t bfReserved1;
+      uint16_t bfReserved2;
+      uint32_t bfOffBits;
+    };
+    struct BmpInfoHeader
+    {
+      uint32_t biSize;
+      int32_t biWidth;
+      int32_t biHeight;
+      uint16_t biPlanes;
+      uint16_t biBitCount;
+      uint32_t biCompression;
+      uint32_t biSizeImage;
+      int32_t biXPelsPerMeter;
+      int32_t biYPelsPerMeter;
+      uint32_t biClrUsed;
+      uint32_t biClrImportant;
+    };
+#pragma pack(pop)
+
+    BmpFileHeader fh{};
+    fh.bfType = 0x4D42;
+    fh.bfOffBits = sizeof(BmpFileHeader) + sizeof(BmpInfoHeader);
+    fh.bfSize = fh.bfOffBits + static_cast<uint32_t>(imgSize);
+
+    BmpInfoHeader ih{};
+    ih.biSize = sizeof(BmpInfoHeader);
+    ih.biWidth = w;
+    ih.biHeight = h; // bottom-up
+    ih.biPlanes = 1;
+    ih.biBitCount = 24;
+    ih.biCompression = 0;
+    ih.biSizeImage = static_cast<uint32_t>(imgSize);
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path, L"wb") != 0 || !f)
+    {
+      ctx_->Unmap(tex.Get(), 0);
+      return false;
+    }
+
+    fwrite(&fh, 1, sizeof(fh), f);
+    fwrite(&ih, 1, sizeof(ih), f);
+
+    std::vector<uint8_t> row(static_cast<size_t>(stride), 0);
+    // Source is top-down DXGI; BMP wants bottom-up.
+    for (int y = h - 1; y >= 0; --y)
+    {
+      const auto* src = static_cast<const uint8_t*>(map.pData) + y * map.RowPitch;
+      for (int x = 0; x < w; ++x)
+      {
+        // R8G8B8A8_UNORM
+        const uint8_t r = src[x * 4 + 0];
+        const uint8_t g = src[x * 4 + 1];
+        const uint8_t b = src[x * 4 + 2];
+        row[static_cast<size_t>(x * 3 + 0)] = b;
+        row[static_cast<size_t>(x * 3 + 1)] = g;
+        row[static_cast<size_t>(x * 3 + 2)] = r;
+      }
+      fwrite(row.data(), 1, static_cast<size_t>(stride), f);
+    }
+
+    fclose(f);
+    ctx_->Unmap(tex.Get(), 0);
+    return true;
+  }
+
   HWND hwnd_ = nullptr;
   Config cfg_{};
   int width_ = 0;
@@ -1231,6 +1396,7 @@ private:
   int atlasW_ = 0;
   int atlasH_ = 0;
   float timeSec_ = 0.f;
+  bool dumpedFrame_ = false;
 
   ComPtr<ID3D11Device> device_;
   ComPtr<ID3D11DeviceContext> ctx_;
@@ -1251,6 +1417,7 @@ private:
   ComPtr<ID3D11SamplerState> samp_;
   ComPtr<ID3D11BlendState> blend_;
   ComPtr<ID3D11BlendState> blendAdd_;
+  ComPtr<ID3D11RasterizerState> raster_;
   ComPtr<ID3D11Texture2D> fontTex_;
   ComPtr<ID3D11ShaderResourceView> fontSrv_;
 };

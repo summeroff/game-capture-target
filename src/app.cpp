@@ -546,6 +546,7 @@ void App::Frame()
   fi.sceneName = scene_ ? scene_->Name() : scene::SceneIdName(cfg_.scene);
   fi.sceneSeed = cfg_.sceneSeed;
   fi.sceneDraw = scene_ ? &sceneDraw_ : nullptr;
+  fi.dumpFramePath = cfg_.dumpFramePath.empty() ? nullptr : cfg_.dumpFramePath.c_str();
 
   if (renderer_)
     renderer_->Render(fi);

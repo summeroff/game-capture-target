@@ -390,6 +390,8 @@ void PrintConfig(const Config& c)
   Log("  no-hud      = %d", c.noHud ? 1 : 0);
   Log("  scene       = %s", Narrow(scene::SceneIdName(c.scene)).c_str());
   Log("  scene-seed  = 0x%08X (%u)", c.sceneSeed, c.sceneSeed);
+  if (!c.dumpFramePath.empty())
+    Log("  dump-frame  = %s", Narrow(c.dumpFramePath).c_str());
   Log("  block-capture = %s", Narrow(BlockCaptureModeName(c.blockCapture)).c_str());
   Log("  block-after = %d", c.blockCaptureAfterSeconds);
   Log("  show-block-errors = %d", c.showBlockErrors ? 1 : 0);
@@ -420,6 +422,7 @@ Options:
   --scene <name>            Visual stress scene (default: aurora)
   --scene-seed <u32>        Deterministic scene RNG seed (default: 0xC5A2EE)
   --list-scenes             Print scene table
+  --dump-frame <path.bmp>   d3d11: write one framebuffer BMP after a few frames
   --config <path>           INI file; flags override file values
   --profile <name>          Apply game profile (title/class/block defaults)
   --list-profiles           Print profile table
@@ -701,6 +704,14 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       }
       c.sceneSeed = static_cast<uint32_t>(n);
+      continue;
+    }
+    if (EqI(a, L"--dump-frame"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--dump-frame"))
+        return false;
+      c.dumpFramePath = v;
       continue;
     }
     if (EqI(a, L"--show-block-errors"))

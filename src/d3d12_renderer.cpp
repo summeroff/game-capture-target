@@ -34,7 +34,8 @@ struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; };
 struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 col : COLOR0; };
 VSOut VSMain(VSIn i) {
   VSOut o;
-  o.pos = mul(float4(i.pos, 0, 1), uTransform);
+  // Column-vector convention (CPU builds p' = M * p). mul(v,M) drops translation.
+  o.pos = mul(uTransform, float4(i.pos, 0, 1));
   o.uv = i.uv;
   o.col = uColor;
   return o;

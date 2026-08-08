@@ -41,6 +41,7 @@ struct Config
 
   scene::SceneId scene = scene::SceneId::Aurora;
   uint32_t sceneSeed = 0x00C5A2EEu;
+  std::wstring dumpFramePath; // if set, d3d11 writes one BMP after a few frames
 
   BlockCaptureMode blockCapture = BlockCaptureMode::None;
   int blockCaptureAfterSeconds = 0; // 0 = apply immediately (if mode != none)
