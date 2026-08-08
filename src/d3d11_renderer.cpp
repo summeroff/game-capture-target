@@ -397,8 +397,9 @@ public:
     MatOrthoPixels(ortho, static_cast<float>(width_), static_cast<float>(height_));
     const float blendFactor[4] = {0, 0, 0, 0};
 
-    // Backdrop
-    const scene::BackdropId bd = sd ? sd->backdrop : scene::BackdropId::Aurora;
+    // Backdrop — only Aurora uses the procedural nebula PS.
+    const scene::BackdropId bd = sd ? sd->backdrop : scene::BackdropId::Solid;
+    bool drewAuroraPs = false;
     if (bd == scene::BackdropId::Aurora)
     {
       float scl[16], tr[16], world[16], mvp[16];
@@ -410,13 +411,18 @@ public:
       ctx_->PSSetShader(psBg_.Get(), nullptr, 0);
       UpdateCB(mvp, 1, 1, 1, 1);
       ctx_->Draw(6, 0);
+      drewAuroraPs = true;
     }
 
     // Scene primitives
+    int drew = 0;
     if (sd)
     {
       for (const auto& p : sd->prims)
+      {
         DrawPrim(ortho, p);
+        ++drew;
+      }
 
       // Fullscreen flash (additive)
       if (sd->flashA > 0.001f)
@@ -426,6 +432,20 @@ public:
         DrawTransformed(ortho, width_ * 0.5f, height_ * 0.5f, 0.f, float(width_), float(height_),
                         sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.65f);
       }
+    }
+
+    // Ground-truth: what this backend actually submitted (not CLI selection).
+    if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
+    {
+      scene::PrimCounts pc{};
+      if (sd)
+        pc = scene::CountPrims(sd->prims);
+      Log("d3d11-draw: scene=%s backdrop=%s auroraPS=%d clear=%.3f,%.3f,%.3f "
+          "submitted_prims=%d/%d [solid=%d orb=%d ring=%d line=%d tri=%d circle=%d] flashA=%.2f",
+          Narrow(info.sceneName ? info.sceneName : L"?").c_str(),
+          Narrow(scene::BackdropIdName(bd)).c_str(), drewAuroraPs ? 1 : 0, clearR, clearG, clearB,
+          drew, pc.total, pc.solid, pc.orb, pc.ring, pc.line, pc.tri, pc.circle,
+          sd ? sd->flashA : 0.f);
     }
 
     // HUD
@@ -458,6 +478,17 @@ public:
       lines.emplace_back(line);
       sprintf_s(line, "seed   0x%08X", info.sceneSeed);
       lines.emplace_back(line);
+      {
+        scene::PrimCounts pc{};
+        if (sd)
+          pc = scene::CountPrims(sd->prims);
+        sprintf_s(line, "draw   bg=%s auroraPS=%d prims=%d",
+                  Narrow(scene::BackdropIdName(bd)).c_str(), drewAuroraPs ? 1 : 0, drew);
+        lines.emplace_back(line);
+        sprintf_s(line, "prims  s=%d o=%d r=%d l=%d t=%d c=%d", pc.solid, pc.orb, pc.ring, pc.line,
+                  pc.tri, pc.circle);
+        lines.emplace_back(line);
+      }
       sprintf_s(line, "class  %s", Narrow(info.windowClass).c_str());
       lines.emplace_back(line);
       sprintf_s(line, "title  %s", Narrow(info.windowTitle).c_str());

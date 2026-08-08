@@ -64,7 +64,7 @@ struct SceneHudExtras
 
 struct SceneDraw
 {
-  BackdropId backdrop = BackdropId::Aurora;
+  BackdropId backdrop = BackdropId::Solid;
   float clearR = 0.01f;
   float clearG = 0.01f;
   float clearB = 0.03f;
@@ -75,6 +75,22 @@ struct SceneDraw
   std::vector<Prim> prims;
   SceneHudExtras hud;
 };
+
+const wchar_t* BackdropIdName(BackdropId id);
+const wchar_t* PrimKindName(PrimKind k);
+
+// Tally prims for render-path diagnostics.
+struct PrimCounts
+{
+  int total = 0;
+  int solid = 0;
+  int orb = 0;
+  int ring = 0;
+  int line = 0;
+  int tri = 0;
+  int circle = 0;
+};
+PrimCounts CountPrims(const std::vector<Prim>& prims);
 
 class IScene
 {

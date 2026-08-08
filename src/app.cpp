@@ -493,7 +493,8 @@ void App::Frame()
       scene_->Resize(cw, ch);
     scene_->Update(elapsedSec_, lastDt_, cw > 0 ? cw : cfg_.width, ch > 0 ? ch : cfg_.height);
     // Keep prims capacity; only reset draw-list payload fields.
-    sceneDraw_.backdrop = scene::BackdropId::Aurora;
+    // Default backdrop is Solid — never Aurora (avoids nebula PS if Emit forgets to set it).
+    sceneDraw_.backdrop = scene::BackdropId::Solid;
     sceneDraw_.clearR = 0.01f;
     sceneDraw_.clearG = 0.01f;
     sceneDraw_.clearB = 0.03f;
@@ -504,6 +505,29 @@ void App::Frame()
     sceneDraw_.hud = {};
     sceneDraw_.prims.clear();
     scene_->Emit(sceneDraw_);
+
+    // Emit-path diagnostics (not just CLI selection).
+    const bool logNow =
+        (frameIndex_ == 0) || (frameIndex_ == 1) || (frameIndex_ % 120 == 0); // ~2s at 60fps
+    if (logNow)
+    {
+      const scene::PrimCounts pc = scene::CountPrims(sceneDraw_.prims);
+      Log("scene-emit: name=%s id=%d backdrop=%s(%d) clear=%.3f,%.3f,%.3f flashA=%.2f "
+          "prims=%d [solid=%d orb=%d ring=%d line=%d tri=%d circle=%d] hud1=\"%s\"",
+          Narrow(scene_->Name()).c_str(), static_cast<int>(scene_->Id()),
+          Narrow(scene::BackdropIdName(sceneDraw_.backdrop)).c_str(),
+          static_cast<int>(sceneDraw_.backdrop), sceneDraw_.clearR, sceneDraw_.clearG,
+          sceneDraw_.clearB, sceneDraw_.flashA, pc.total, pc.solid, pc.orb, pc.ring, pc.line,
+          pc.tri, pc.circle, Narrow(sceneDraw_.hud.line1).c_str());
+      if (!sceneDraw_.prims.empty())
+      {
+        const auto& p0 = sceneDraw_.prims.front();
+        const auto& pN = sceneDraw_.prims.back();
+        Log("scene-emit: first kind=%s xy=%.1f,%.1f wh=%.1f,%.1f  last kind=%s xy=%.1f,%.1f",
+            Narrow(scene::PrimKindName(p0.kind)).c_str(), p0.x, p0.y, p0.w, p0.h,
+            Narrow(scene::PrimKindName(pN.kind)).c_str(), pN.x, pN.y);
+      }
+    }
   }
 
   FrameInfo fi{};

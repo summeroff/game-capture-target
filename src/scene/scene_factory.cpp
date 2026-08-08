@@ -23,6 +23,71 @@ const wchar_t* SceneIdName(SceneId id)
   return L"?";
 }
 
+const wchar_t* BackdropIdName(BackdropId id)
+{
+  switch (id)
+  {
+  case BackdropId::Solid:
+    return L"solid";
+  case BackdropId::Aurora:
+    return L"aurora-ps";
+  case BackdropId::Starfield:
+    return L"starfield";
+  }
+  return L"?";
+}
+
+const wchar_t* PrimKindName(PrimKind k)
+{
+  switch (k)
+  {
+  case PrimKind::QuadSolid:
+    return L"solid";
+  case PrimKind::QuadOrb:
+    return L"orb";
+  case PrimKind::QuadRing:
+    return L"ring";
+  case PrimKind::Line:
+    return L"line";
+  case PrimKind::Triangle:
+    return L"tri";
+  case PrimKind::CircleOutline:
+    return L"circle";
+  }
+  return L"?";
+}
+
+PrimCounts CountPrims(const std::vector<Prim>& prims)
+{
+  PrimCounts c;
+  c.total = static_cast<int>(prims.size());
+  for (const auto& p : prims)
+  {
+    switch (p.kind)
+    {
+    case PrimKind::QuadSolid:
+      ++c.solid;
+      break;
+    case PrimKind::QuadOrb:
+      ++c.orb;
+      break;
+    case PrimKind::QuadRing:
+      ++c.ring;
+      break;
+    case PrimKind::Line:
+      ++c.line;
+      break;
+    case PrimKind::Triangle:
+      ++c.tri;
+      break;
+    case PrimKind::CircleOutline:
+      ++c.circle;
+      break;
+    }
+  }
+  return c;
+}
+
 bool ParseSceneId(const std::wstring& s, SceneId* out)
 {
   if (_wcsicmp(s.c_str(), L"aurora") == 0)
