@@ -12,7 +12,8 @@ enum class SceneId
 {
   Aurora = 0,
   Orbital,
-  // Highway, Skirmish, Sonar — later
+  Highway,
+  // Skirmish, Sonar — later
 };
 
 enum class BackdropId

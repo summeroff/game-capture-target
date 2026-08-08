@@ -119,7 +119,7 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--exit-after` | 0 | |
 | `--topmost` | off | |
 | `--no-hud` | off | |
-| `--scene <name>` | `aurora` | `aurora` \| `orbital` (more later) |
+| `--scene <name>` | `aurora` | `aurora` \| `orbital` \| `highway` (more later) |
 | `--scene-seed <u32>` | `0xC5A2EE` | Deterministic scene RNG |
 | `--list-scenes` | — | Scene table |
 | `--config <path>` | — | INI; flags override |
@@ -137,8 +137,9 @@ Shared CPU scene → draw-list; d3d11 is reference quality, d3d12/GDI approximat
 |-----------|--------------|----------|
 | `aurora` (default) | Nebula, orb rings, comet, EQ bars | General freeze tell |
 | `orbital` | Drones vs asteroids, explosions, flash | Particles, alpha, tiny sprites, HUD |
+| `highway` | Night neon highway, perspective road, traffic, speedo | Aspect ratio, resize, clipping, motion blur tell |
 
-`--scene-seed <u32>` makes orbital spawns/motion reproducible across runs.
+`--scene-seed <u32>` makes scene spawns/motion reproducible across runs.
 
 ## Hotkeys
 
@@ -213,7 +214,7 @@ tools/launch.ps1   spawn-as.ps1
 third_party/Vulkan-Headers/   # vendored Khronos headers
 src/
   main.cpp app.* config.* profiles.* block_capture.*
-  scene/   # aurora + orbital draw-list sims
+  scene/   # aurora + orbital + highway draw-list sims
   d3d11_renderer.cpp d3d12_renderer.cpp vulkan_renderer.cpp none_renderer.cpp
   renderer.hpp font8x8.hpp log.hpp
 ```

@@ -435,6 +435,7 @@ Options:
 Scenes:
   aurora   Nebula, orb rings, comet, EQ bars (default freeze-tell)
   orbital  Drones vs asteroids, particles, explosions, screen flash
+  highway  Night neon highway: perspective road, traffic, speedo
 
 Capture blocking:
   signature-policy  SetProcessMitigationPolicy(MicrosoftSignedOnly) AFTER the

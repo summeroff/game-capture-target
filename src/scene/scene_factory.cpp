@@ -10,6 +10,7 @@ namespace scene
 // Defined in scene_*.cpp
 std::unique_ptr<IScene> CreateAuroraScene();
 std::unique_ptr<IScene> CreateOrbitalScene();
+std::unique_ptr<IScene> CreateHighwayScene();
 
 const wchar_t* SceneIdName(SceneId id)
 {
@@ -19,6 +20,8 @@ const wchar_t* SceneIdName(SceneId id)
     return L"aurora";
   case SceneId::Orbital:
     return L"orbital";
+  case SceneId::Highway:
+    return L"highway";
   }
   return L"?";
 }
@@ -100,6 +103,11 @@ bool ParseSceneId(const std::wstring& s, SceneId* out)
     *out = SceneId::Orbital;
     return true;
   }
+  if (_wcsicmp(s.c_str(), L"highway") == 0)
+  {
+    *out = SceneId::Highway;
+    return true;
+  }
   return false;
 }
 
@@ -111,6 +119,8 @@ std::unique_ptr<IScene> CreateScene(SceneId id)
     return CreateAuroraScene();
   case SceneId::Orbital:
     return CreateOrbitalScene();
+  case SceneId::Highway:
+    return CreateHighwayScene();
   }
   return CreateAuroraScene();
 }
@@ -120,7 +130,8 @@ void PrintSceneList()
   std::printf("Available scenes:\n");
   std::printf("  aurora   Nebula backdrop, orb rings, comet, EQ bars (default)\n");
   std::printf("  orbital  Starfield defense: drones, asteroids, explosions, flash\n");
-  std::printf("\nUpcoming: highway, skirmish, sonar\n");
+  std::printf("  highway  Night neon highway: perspective road, traffic, speedo\n");
+  std::printf("\nUpcoming: skirmish, sonar\n");
   std::printf("Flags: --scene <name>  --scene-seed <u32>  --list-scenes\n");
 }
 
