@@ -26,16 +26,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install clang-format
+      - name: Install clang-format 18
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-format
+          # Pin major version — unversioned `clang-format` drifts with ubuntu-latest images.
+          sudo apt-get install -y clang-format-18
 
       - name: Check formatting
+        env:
+          CLANG_FORMAT: clang-format-18
         run: |
           chmod +x scripts/format.sh
           ./scripts/format.sh --check
-
+          clang-format-18 --version
   build:
     name: Build & smoke (Windows x64)
     needs: format

@@ -54,11 +54,9 @@ App::~App()
 {
   unloadHookArmed_ = false;
   ReleaseSquatIpc();
-  if (renderer_)
-  {
-    renderer_->Shutdown();
-    renderer_.reset();
-  }
+  // Teardown via unique_ptr dtor only — each renderer destructor calls Shutdown().
+  // Avoid an extra explicit Shutdown() here (double-teardown risk if not idempotent).
+  renderer_.reset();
   if (hwnd_)
   {
     DestroyWindow(hwnd_);

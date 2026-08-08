@@ -1,7 +1,7 @@
 # Coding style (fakegame)
 
-Machine-enforced by `.clang-format` + `scripts/format.*` + the CI **Format** job.
-Human summary:
+Machine-enforced by `.clang-format` + `scripts/format.*` + the CI **Format** job
+(`clang-format-18` pinned). Human summary:
 
 ## Braces (Allman + joined else)
 

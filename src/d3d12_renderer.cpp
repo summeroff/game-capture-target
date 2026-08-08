@@ -411,6 +411,11 @@ private:
       return false;
     }
     fenceEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!fenceEvent_)
+    {
+      *error = L"CreateEventW (fence) failed, GetLastError=" + std::to_wstring(GetLastError());
+      return false;
+    }
     fenceValue_ = 0;
     for (UINT i = 0; i < kFrameCount; ++i)
       fenceValues_[i] = 0;

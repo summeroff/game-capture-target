@@ -170,7 +170,7 @@ GitHub Actions (`.github/workflows/ci.yml`) on push/PR to `master`:
 
 | Job | What |
 |-----|------|
-| **Format** | Ubuntu + `clang-format` via `scripts/format.sh --check` |
+| **Format** | Ubuntu + pinned `clang-format-18` via `scripts/format.sh --check` |
 | **Build & smoke (x64)** | VS 2022 Release + `scripts/ci-smoke.ps1` (help, profiles JSON, d3d11/d3d12/none, flip-model 0, squat-ipc, cs2 profile; vulkan optional) |
 | **Build (Win32)** | x86 Release + short d3d11/none smoke |
 

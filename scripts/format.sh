@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # format.sh [--check]  — used by CI (Linux) and git-bash.
+# Prefer a pinned major when available (CI sets CLANG_FORMAT=clang-format-18).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -9,14 +10,16 @@ case "${1:-}" in
   --check|-n|--dry-run) CHECK=1 ;;
 esac
 
-CF="${CLANG_FORMAT:-clang-format}"
-if ! command -v "$CF" >/dev/null 2>&1; then
-  for c in clang-format-18 clang-format-17 clang-format-16 clang-format-15; do
+CF="${CLANG_FORMAT:-}"
+if [[ -z "$CF" ]] || ! command -v "$CF" >/dev/null 2>&1; then
+  CF=""
+  # Prefer pinned majors first so local matches CI when multiple are installed.
+  for c in clang-format-18 clang-format-17 clang-format-16 clang-format-15 clang-format; do
     if command -v "$c" >/dev/null 2>&1; then CF="$c"; break; fi
   done
 fi
-if ! command -v "$CF" >/dev/null 2>&1; then
-  echo "clang-format not found" >&2
+if [[ -z "$CF" ]] || ! command -v "$CF" >/dev/null 2>&1; then
+  echo "clang-format not found (want clang-format-18 for CI parity)" >&2
   exit 2
 fi
 
