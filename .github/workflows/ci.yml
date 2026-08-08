@@ -1,0 +1,97 @@
+# Build, format-check, and smoke-test fakegame on Windows.
+#
+# Jobs:
+#   format — clang-format dry-run (Allman braces; "} else {" allowed)
+#   build  — VS 2022 Release x64 + scripts/ci-smoke.ps1
+#            optional Win32 (x86) build (no full smoke — inject path compile gate)
+#
+# Runner: windows-2022 (not windows-latest) for -G "Visual Studio 17 2022".
+
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: Format (clang-format)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format 18
+        run: |
+          sudo apt-get update
+          # Pin major version — unversioned `clang-format` drifts with ubuntu-latest images.
+          sudo apt-get install -y clang-format-18
+
+      - name: Check formatting
+        env:
+          CLANG_FORMAT: clang-format-18
+        run: |
+          chmod +x scripts/format.sh
+          ./scripts/format.sh --check
+          clang-format-18 --version
+  build:
+    name: Build & smoke (Windows x64)
+    needs: format
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (VS 2022 x64)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
+
+      - name: Smoke (CLI + short API runs)
+        shell: pwsh
+        run: |
+          .\scripts\ci-smoke.ps1 -Exe (Resolve-Path .\build\bin\fakegame.exe).Path -Seconds 2
+
+      - name: Upload Release artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fakegame-release-win-x64
+          path: |
+            build/bin/fakegame.exe
+            build/bin/*.pdb
+          if-no-files-found: error
+          retention-days: 14
+  build-x86:
+    name: Build (Windows Win32)
+    needs: format
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (VS 2022 Win32)
+        run: cmake -S . -B build-x86 -G "Visual Studio 17 2022" -A Win32
+
+      - name: Build Release x86
+        run: cmake --build build-x86 --config Release --parallel
+
+      - name: Quick x86 smoke (d3d11 + none)
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path .\build-x86\bin\fakegame.exe).Path
+          & $exe --list-profiles --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $exe --api d3d11 --exit-after 2 --width 640 --height 360 --vsync 0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $exe --api none --exit-after 2 --width 640 --height 360
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "x86 smoke OK"

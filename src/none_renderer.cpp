@@ -8,9 +8,11 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 
-class NoneRenderer final : public IRenderer {
+class NoneRenderer final : public IRenderer
+{
 public:
   ~NoneRenderer() override { Shutdown(); }
 
@@ -68,7 +70,8 @@ public:
     GetClientRect(hwnd_, &rc);
     const int w = rc.right - rc.left;
     const int h = rc.bottom - rc.top;
-    if (w <= 0 || h <= 0) {
+    if (w <= 0 || h <= 0)
+    {
       ReleaseDC(hwnd_, hdc);
       return;
     }
@@ -97,7 +100,8 @@ public:
       const float q = v * (1.f - f * s);
       const float tt = v * (1.f - (1.f - f) * s);
       float r = 0.f, g = 0.f, b = 0.f;
-      switch (static_cast<int>(sector) % 6) {
+      switch (static_cast<int>(sector) % 6)
+      {
       case 0:
         r = v;
         g = tt;
@@ -133,15 +137,15 @@ public:
     };
 
     // Aurora-ish horizontal bands
-    for (int y = 0; y < h; y += 3) {
+    for (int y = 0; y < h; y += 3)
+    {
       const float ny = (y / float(h)) * 2.f - 1.f;
       const float wave = std::sin(t * 0.9f + y * 0.02f) * 0.3f;
       const float band = std::exp(-(ny + wave) * (ny + wave) * 4.f);
       if (band < 0.05f)
         continue;
       const int a = int(band * 90);
-      HPEN pen = CreatePen(PS_SOLID, 3,
-                           RGB(int(20 + a * 0.4f), int(80 + a * 1.2f), int(60 + a)));
+      HPEN pen = CreatePen(PS_SOLID, 3, RGB(int(20 + a * 0.4f), int(80 + a * 1.2f), int(60 + a)));
       HGDIOBJ op = SelectObject(mem, pen);
       MoveToEx(mem, 0, y, nullptr);
       LineTo(mem, w, y);
@@ -159,7 +163,8 @@ public:
     };
 
     // Orb rings
-    for (int i = 0; i < 14; ++i) {
+    for (int i = 0; i < 14; ++i)
+    {
       const float a0 = t * 0.7f + i * (6.2831853f / 14);
       const float radius = 160.f + 35.f * std::sin(t * 1.1f + i * 0.4f);
       const float ox = cx + std::cos(a0) * radius;
@@ -174,7 +179,8 @@ public:
     {
       const float ca = t * 1.15f;
       const float cometR = 230.f + 50.f * std::sin(t * 0.6f);
-      for (int trail = 6; trail >= 0; --trail) {
+      for (int trail = 6; trail >= 0; --trail)
+      {
         const float ta = ca - trail * 0.09f;
         const float trr = cometR - trail * 7.f;
         HBRUSH br = hsvBrush(std::fmod(0.1f + trail * 0.03f + t * 0.1f, 1.f), 0.9f, 1.f);
@@ -186,9 +192,9 @@ public:
     // Bottom bars
     constexpr int kBars = 40;
     const float barW = w / float(kBars);
-    for (int i = 0; i < kBars; ++i) {
-      const float n =
-          0.5f + 0.5f * std::sin(t * 4.f + i * 0.45f) * std::cos(t * 2.3f + i * 0.17f);
+    for (int i = 0; i < kBars; ++i)
+    {
+      const float n = 0.5f + 0.5f * std::sin(t * 4.f + i * 0.45f) * std::cos(t * 2.3f + i * 0.17f);
       const int bh = int(25 + n * (h * 0.2f));
       HBRUSH br = hsvBrush(std::fmod(i / float(kBars) + t * 0.15f, 1.f), 0.85f, 1.f);
       RECT brc{int(i * barW + 1), h - bh - 6, int((i + 1) * barW - 1), h - 6};
@@ -204,7 +210,8 @@ public:
       POINT pts[4];
       const float cs = std::cos(ang), sn = std::sin(ang);
       const float local[4][2] = {{0, -hs}, {hs, 0}, {0, hs}, {-hs, 0}};
-      for (int i = 0; i < 4; ++i) {
+      for (int i = 0; i < 4; ++i)
+      {
         pts[i].x = LONG(cx + local[i][0] * cs - local[i][1] * sn);
         pts[i].y = LONG(cy + local[i][0] * sn + local[i][1] * cs);
       }
@@ -219,7 +226,8 @@ public:
       DeleteObject(br);
     }
 
-    if (!info.noHud) {
+    if (!info.noHud)
+    {
       SetBkMode(mem, TRANSPARENT);
       SetTextColor(mem, RGB(255, 240, 80));
       HFONT big = CreateFontW(56, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
@@ -239,7 +247,8 @@ public:
       SetTextColor(mem, RGB(230, 240, 255));
       std::wstring hud;
       hud += L"frame  " + std::to_wstring(info.frameIndex) + L"\n";
-      hud += L"size   " + std::to_wstring(info.clientW) + L"x" + std::to_wstring(info.clientH) + L"\n";
+      hud +=
+          L"size   " + std::to_wstring(info.clientW) + L"x" + std::to_wstring(info.clientH) + L"\n";
       hud += L"api    none (GDI, no swapchain)\n";
       hud += L"swap   n/a\n";
       hud += L"present n/a\n";

@@ -10,11 +10,13 @@
 
 #pragma comment(lib, "dwmapi.lib")
 
-namespace {
+namespace
+{
 
 constexpr UINT_PTR kTimerId = 1;
 
-struct StylePack {
+struct StylePack
+{
   DWORD style;
   DWORD exStyle;
 };
@@ -22,7 +24,8 @@ struct StylePack {
 StylePack StylesForMode(WindowMode mode)
 {
   StylePack s{};
-  switch (mode) {
+  switch (mode)
+  {
   case WindowMode::Windowed:
     s.style = WS_OVERLAPPEDWINDOW;
     s.exStyle = WS_EX_APPWINDOW;
@@ -51,15 +54,16 @@ App::~App()
 {
   unloadHookArmed_ = false;
   ReleaseSquatIpc();
-  if (renderer_) {
-    renderer_->Shutdown();
-    renderer_.reset();
-  }
-  if (hwnd_) {
+  // Teardown via unique_ptr dtor only — each renderer destructor calls Shutdown().
+  // Avoid an extra explicit Shutdown() here (double-teardown risk if not idempotent).
+  renderer_.reset();
+  if (hwnd_)
+  {
     DestroyWindow(hwnd_);
     hwnd_ = nullptr;
   }
-  if (atom_) {
+  if (atom_)
+  {
     UnregisterClassW(cfg_.windowClass.c_str(), GetModuleHandleW(nullptr));
     atom_ = 0;
   }
@@ -80,12 +84,15 @@ bool App::Initialize(std::wstring* error)
     return false;
 
   // Capture block AFTER renderer is fully up (signature-policy needs driver UMDs loaded).
-  if (cfg_.blockCapture != BlockCaptureMode::None) {
-    if (cfg_.blockCaptureAfterSeconds > 0) {
+  if (cfg_.blockCapture != BlockCaptureMode::None)
+  {
+    if (cfg_.blockCaptureAfterSeconds > 0)
+    {
       blockPending_ = true;
-      Log("block: will apply %s after %d s", Narrow(BlockCaptureModeName(cfg_.blockCapture)).c_str(),
-          cfg_.blockCaptureAfterSeconds);
-    } else {
+      Log("block: will apply %s after %d s",
+          Narrow(BlockCaptureModeName(cfg_.blockCapture)).c_str(), cfg_.blockCaptureAfterSeconds);
+    } else
+    {
       if (!ApplyBlockNow(error))
         return false;
     }
@@ -96,7 +103,8 @@ bool App::Initialize(std::wstring* error)
 
   // Ensure not cloaked / visible for OBS check_window_valid.
   BOOL cloaked = FALSE;
-  if (SUCCEEDED(DwmGetWindowAttribute(hwnd_, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) {
+  if (SUCCEEDED(DwmGetWindowAttribute(hwnd_, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked)
+  {
     Log("warn: window is cloaked at startup");
   }
 
@@ -127,9 +135,11 @@ bool App::RegisterWindowClass(std::wstring* error)
   wc.hIconSm = wc.hIcon;
 
   atom_ = RegisterClassExW(&wc);
-  if (!atom_) {
+  if (!atom_)
+  {
     const DWORD err = GetLastError();
-    if (err == ERROR_CLASS_ALREADY_EXISTS) {
+    if (err == ERROR_CLASS_ALREADY_EXISTS)
+    {
       // Reuse existing class if previous run crashed mid-unregister.
       atom_ = 1;
       return true;
@@ -154,10 +164,10 @@ bool App::CreateMainWindow(std::wstring* error)
   const int ww = rc.right - rc.left;
   const int wh = rc.bottom - rc.top;
 
-  hwnd_ = CreateWindowExW(ex, cfg_.windowClass.c_str(), cfg_.title.c_str(), sp.style,
-                          CW_USEDEFAULT, CW_USEDEFAULT, ww, wh, nullptr, nullptr,
-                          GetModuleHandleW(nullptr), this);
-  if (!hwnd_) {
+  hwnd_ = CreateWindowExW(ex, cfg_.windowClass.c_str(), cfg_.title.c_str(), sp.style, CW_USEDEFAULT,
+                          CW_USEDEFAULT, ww, wh, nullptr, nullptr, GetModuleHandleW(nullptr), this);
+  if (!hwnd_)
+  {
     *error = L"CreateWindowEx failed, GetLastError=" + std::to_wstring(GetLastError());
     return false;
   }
@@ -168,7 +178,8 @@ bool App::CreateMainWindow(std::wstring* error)
 
 bool App::CreateRenderer(std::wstring* error)
 {
-  switch (cfg_.api) {
+  switch (cfg_.api)
+  {
   case GraphicsApi::D3D11:
     renderer_ = CreateD3D11Renderer();
     break;
@@ -186,13 +197,15 @@ bool App::CreateRenderer(std::wstring* error)
     return false;
   }
 
-  if (!renderer_->Init(hwnd_, cfg_, error)) {
+  if (!renderer_->Init(hwnd_, cfg_, error))
+  {
     renderer_.reset();
     return false;
   }
 
   // Flags that don't apply: log rather than silent accept.
-  if (cfg_.api == GraphicsApi::None || cfg_.api == GraphicsApi::Vulkan) {
+  if (cfg_.api == GraphicsApi::None || cfg_.api == GraphicsApi::Vulkan)
+  {
     if (!cfg_.flipModel)
       Log("note: --flip-model ignored for api=%s", Narrow(GraphicsApiName(cfg_.api)).c_str());
   }
@@ -201,7 +214,8 @@ bool App::CreateRenderer(std::wstring* error)
 
 bool App::ApplyBlockNow(std::wstring* error)
 {
-  switch (cfg_.blockCapture) {
+  switch (cfg_.blockCapture)
+  {
   case BlockCaptureMode::None:
     return true;
   case BlockCaptureMode::SignaturePolicy:
@@ -230,7 +244,8 @@ bool App::ApplyBlockNow(std::wstring* error)
 
 void App::LiftReversibleBlock()
 {
-  if (reversibleMode_ == BlockCaptureMode::SquatIpc) {
+  if (reversibleMode_ == BlockCaptureMode::SquatIpc)
+  {
     ReleaseSquatIpc();
   }
   unloadHookArmed_ = false;
@@ -243,7 +258,8 @@ void App::LiftReversibleBlock()
 void App::TickBlockCapture()
 {
   if (blockPending_ && cfg_.blockCaptureAfterSeconds > 0 &&
-      elapsedSec_ >= static_cast<double>(cfg_.blockCaptureAfterSeconds)) {
+      elapsedSec_ >= static_cast<double>(cfg_.blockCaptureAfterSeconds))
+  {
     blockPending_ = false;
     std::wstring err;
     Log("block: block-capture-after %d reached — applying %s", cfg_.blockCaptureAfterSeconds,
@@ -254,8 +270,10 @@ void App::TickBlockCapture()
 
   PollHookModules(true);
 
-  if (unloadHookArmed_) {
-    if (TryUnloadGraphicsHook()) {
+  if (unloadHookArmed_)
+  {
+    if (TryUnloadGraphicsHook())
+    {
       // keep armed — OBS will reinject
     }
   }
@@ -266,19 +284,22 @@ void App::OnHotkeyBlockToggle()
   Log("hotkey F7: toggle capture block");
   if (cfg_.blockCapture == BlockCaptureMode::SignaturePolicy ||
       (blockActive_ && reversibleMode_ == BlockCaptureMode::None &&
-       cfg_.blockCapture == BlockCaptureMode::SignaturePolicy)) {
+       cfg_.blockCapture == BlockCaptureMode::SignaturePolicy))
+  {
     Log("block: signature-policy is irreversible — F7 ignored");
     return;
   }
 
-  if (blockActive_ && reversibleMode_ != BlockCaptureMode::None) {
+  if (blockActive_ && reversibleMode_ != BlockCaptureMode::None)
+  {
     LiftReversibleBlock();
     return;
   }
 
   // Arm current configured reversible mode, defaulting to squat-ipc if none.
   if (cfg_.blockCapture == BlockCaptureMode::None ||
-      cfg_.blockCapture == BlockCaptureMode::SignaturePolicy) {
+      cfg_.blockCapture == BlockCaptureMode::SignaturePolicy)
+  {
     cfg_.blockCapture = BlockCaptureMode::SquatIpc;
   }
   std::wstring err;
@@ -291,9 +312,11 @@ void App::GetMonitorRect(RECT* out) const
   HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
   MONITORINFO mi{};
   mi.cbSize = sizeof(mi);
-  if (GetMonitorInfoW(mon, &mi)) {
+  if (GetMonitorInfoW(mon, &mi))
+  {
     *out = mi.rcMonitor;
-  } else {
+  } else
+  {
     out->left = 0;
     out->top = 0;
     out->right = GetSystemMetrics(SM_CXSCREEN);
@@ -321,7 +344,8 @@ void App::ApplyWindowMode(WindowMode mode, bool initial)
   SetWindowLongPtrW(hwnd_, GWL_STYLE, static_cast<LONG_PTR>(sp.style));
   SetWindowLongPtrW(hwnd_, GWL_EXSTYLE, static_cast<LONG_PTR>(ex));
 
-  if (mode == WindowMode::Windowed) {
+  if (mode == WindowMode::Windowed)
+  {
     int w = windowedW_;
     int h = windowedH_;
     RECT rc{0, 0, w, h};
@@ -333,15 +357,19 @@ void App::ApplyWindowMode(WindowMode mode, bool initial)
     HWND insertAfter = cfg_.topmost ? HWND_TOPMOST : HWND_NOTOPMOST;
 
     if (!initial && windowedPlacement_.length == sizeof(windowedPlacement_) &&
-        windowedPlacement_.rcNormalPosition.right > windowedPlacement_.rcNormalPosition.left) {
+        windowedPlacement_.rcNormalPosition.right > windowedPlacement_.rcNormalPosition.left)
+    {
       const RECT& r = windowedPlacement_.rcNormalPosition;
       SetWindowPos(hwnd_, insertAfter, r.left, r.top, r.right - r.left, r.bottom - r.top, flags);
-    } else {
+    } else
+    {
       SetWindowPos(hwnd_, insertAfter, 100, 100, ww, wh, flags);
     }
-  } else {
+  } else
+  {
     // Save windowed placement before going borderless/exclusive.
-    if (!initial && (GetWindowLongPtrW(hwnd_, GWL_STYLE) & WS_OVERLAPPEDWINDOW)) {
+    if (!initial && (GetWindowLongPtrW(hwnd_, GWL_STYLE) & WS_OVERLAPPEDWINDOW))
+    {
       windowedPlacement_.length = sizeof(windowedPlacement_);
       GetWindowPlacement(hwnd_, &windowedPlacement_);
       ClientSize(&windowedW_, &windowedH_);
@@ -356,7 +384,8 @@ void App::ApplyWindowMode(WindowMode mode, bool initial)
   }
 
   std::wstring err;
-  if (renderer_) {
+  if (renderer_)
+  {
     int cw = 0, ch = 0;
     ClientSize(&cw, &ch);
     if (cw > 0 && ch > 0)
@@ -370,9 +399,12 @@ void App::ApplyWindowMode(WindowMode mode, bool initial)
 int App::Run()
 {
   MSG msg{};
-  while (running_) {
-    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-      if (msg.message == WM_QUIT) {
+  while (running_)
+  {
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+    {
+      if (msg.message == WM_QUIT)
+      {
         running_ = false;
         break;
       }
@@ -398,26 +430,29 @@ void App::Frame()
 {
   LARGE_INTEGER now{};
   QueryPerformanceCounter(&now);
-  const double dt =
-      static_cast<double>(now.QuadPart - qpcLast_.QuadPart) / static_cast<double>(qpcFreq_.QuadPart);
+  const double dt = static_cast<double>(now.QuadPart - qpcLast_.QuadPart) /
+                    static_cast<double>(qpcFreq_.QuadPart);
 
-  if (dt < frameBudgetSec_ && cfg_.vsync == false) {
+  if (dt < frameBudgetSec_ && cfg_.vsync == false)
+  {
     // Light spin/yield to hit fps target when vsync off.
     if (frameBudgetSec_ - dt > 0.002)
       Sleep(1);
     return;
   }
   // With vsync on, Present blocks; still gate on budget to avoid overwork when tabbed away.
-  if (dt < frameBudgetSec_ * 0.5 && cfg_.vsync) {
+  if (dt < frameBudgetSec_ * 0.5 && cfg_.vsync)
+  {
     Sleep(0);
     return;
   }
 
   qpcLast_ = now;
-  elapsedSec_ =
-      static_cast<double>(now.QuadPart - qpcStart_.QuadPart) / static_cast<double>(qpcFreq_.QuadPart);
+  elapsedSec_ = static_cast<double>(now.QuadPart - qpcStart_.QuadPart) /
+                static_cast<double>(qpcFreq_.QuadPart);
 
-  if (cfg_.exitAfterSeconds > 0 && elapsedSec_ >= cfg_.exitAfterSeconds) {
+  if (cfg_.exitAfterSeconds > 0 && elapsedSec_ >= cfg_.exitAfterSeconds)
+  {
     Log("exit-after %d reached — quitting", cfg_.exitAfterSeconds);
     RequestQuit();
     return;
@@ -460,12 +495,14 @@ void App::TickChurn()
   churnAccum_ = 0.0;
 
   std::wstring err;
-  if ((churnPhase_ % 2) == 0) {
+  if ((churnPhase_ % 2) == 0)
+  {
     // Alternate two client sizes.
     const int w = (churnPhase_ % 4 == 0) ? 1024 : 1600;
     const int h = (churnPhase_ % 4 == 0) ? 576 : 900;
     Log("churn: resize swapchain -> %dx%d", w, h);
-    if (cfg_.mode == WindowMode::Windowed) {
+    if (cfg_.mode == WindowMode::Windowed)
+    {
       windowedW_ = w;
       windowedH_ = h;
       cfg_.width = w;
@@ -479,7 +516,8 @@ void App::TickChurn()
     }
     if (renderer_)
       renderer_->Resize(w, h, &err);
-  } else {
+  } else
+  {
     Log("churn: recreate swapchain");
     if (renderer_)
       renderer_->RecreateSwapchain(&err);
@@ -505,7 +543,8 @@ void App::OnHotkeyResize()
 
   cfg_.width = w;
   cfg_.height = h;
-  if (cfg_.mode == WindowMode::Windowed) {
+  if (cfg_.mode == WindowMode::Windowed)
+  {
     windowedW_ = w;
     windowedH_ = h;
     const StylePack sp = StylesForMode(WindowMode::Windowed);
@@ -554,7 +593,8 @@ void App::OnHotkeyChurn()
 
 LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-  if (msg == WM_NCCREATE) {
+  if (msg == WM_NCCREATE)
+  {
     auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
     auto* self = static_cast<App*>(cs->lpCreateParams);
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
@@ -570,9 +610,11 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-  switch (msg) {
+  switch (msg)
+  {
   case WM_KEYDOWN:
-    switch (wParam) {
+    switch (wParam)
+    {
     case VK_ESCAPE:
       Log("hotkey Esc: quit");
       RequestQuit();
@@ -604,13 +646,16 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     break;
 
   case WM_SIZE:
-    if (wParam != SIZE_MINIMIZED && renderer_) {
+    if (wParam != SIZE_MINIMIZED && renderer_)
+    {
       const int w = LOWORD(lParam);
       const int h = HIWORD(lParam);
-      if (w > 0 && h > 0) {
+      if (w > 0 && h > 0)
+      {
         std::wstring err;
         renderer_->Resize(w, h, &err);
-        if (cfg_.mode == WindowMode::Windowed) {
+        if (cfg_.mode == WindowMode::Windowed)
+        {
           windowedW_ = w;
           windowedH_ = h;
           cfg_.width = w;

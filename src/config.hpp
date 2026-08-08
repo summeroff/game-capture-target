@@ -5,22 +5,25 @@
 #include <cstdint>
 #include <string>
 
-enum class WindowMode {
+enum class WindowMode
+{
   Windowed,
   Borderless,
   FullscreenExclusive,
 };
 
-enum class GraphicsApi {
+enum class GraphicsApi
+{
   D3D11,
   D3D12,
   Vulkan,
-  D3D9, // optional / not yet
+  D3D9,   // optional / not yet
   OpenGL, // reserved
   None,
 };
 
-struct Config {
+struct Config
+{
   std::wstring title = L"Fake Game";
   std::wstring windowClass = L"FakeGameWindowClass";
   int width = 1280;

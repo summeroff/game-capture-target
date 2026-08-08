@@ -19,7 +19,8 @@
 
 using Microsoft::WRL::ComPtr;
 
-namespace {
+namespace
+{
 
 constexpr UINT kFrameCount = 2;
 
@@ -46,11 +47,13 @@ float4 PSText(VSOut i) : SV_Target {
 }
 )";
 
-struct Vertex {
+struct Vertex
+{
   float x, y, u, v;
 };
 
-struct CBData {
+struct CBData
+{
   float transform[16];
   float color[4];
 };
@@ -108,7 +111,8 @@ std::wstring HrMsg(HRESULT hr)
   return buf;
 }
 
-class D3D12Renderer final : public IRenderer {
+class D3D12Renderer final : public IRenderer
+{
 public:
   ~D3D12Renderer() override { Shutdown(); }
 
@@ -134,10 +138,12 @@ public:
 
   void Shutdown() override
   {
-    WaitGpu();
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    // Idempotent: App::~App calls Shutdown then unique_ptr dtor calls it again.
+    if (queue_ && fence_ && fenceEvent_)
+      WaitGpu();
+
+    for (UINT i = 0; i < kFrameCount; ++i)
       renderTargets_[i].Reset();
-    }
     swapchain_.Reset();
     cmdList_.Reset();
     for (auto& a : cmdAlloc_)
@@ -153,13 +159,18 @@ public:
     srvHeap_.Reset();
     rtvHeap_.Reset();
     queue_.Reset();
-    device_.Reset();
-    factory_.Reset();
-    if (fenceEvent_) {
+    if (fenceEvent_)
+    {
       CloseHandle(fenceEvent_);
       fenceEvent_ = nullptr;
     }
     fence_.Reset();
+    device_.Reset();
+    factory_.Reset();
+    frameIndex_ = 0;
+    fenceValue_ = 0;
+    for (UINT i = 0; i < kFrameCount; ++i)
+      fenceValues_[i] = 0;
   }
 
   bool Resize(int width, int height, std::wstring* error) override
@@ -174,16 +185,21 @@ public:
   bool RecreateSwapchain(std::wstring* error) override
   {
     WaitGpu();
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < kFrameCount; ++i)
+    {
       renderTargets_[i].Reset();
     }
-    if (swapchain_) {
-      HRESULT hr = swapchain_->ResizeBuffers(kFrameCount, width_, height_, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
-      if (FAILED(hr)) {
+    if (swapchain_)
+    {
+      HRESULT hr =
+          swapchain_->ResizeBuffers(kFrameCount, width_, height_, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+      if (FAILED(hr))
+      {
         *error = L"ResizeBuffers failed: " + HrMsg(hr);
         return false;
       }
-    } else {
+    } else
+    {
       return CreateSwapchain(error);
     }
     return CreateRtv(error);
@@ -208,11 +224,13 @@ public:
     mode_ = mode;
     if (!swapchain_)
       return true;
-    if (mode == WindowMode::FullscreenExclusive) {
+    if (mode == WindowMode::FullscreenExclusive)
+    {
       HRESULT hr = swapchain_->SetFullscreenState(TRUE, nullptr);
       if (FAILED(hr))
         Log("d3d12: SetFullscreenState TRUE failed %s", Narrow(HrMsg(hr)).c_str());
-    } else {
+    } else
+    {
       BOOL fs = FALSE;
       if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, nullptr)) && fs)
         swapchain_->SetFullscreenState(FALSE, nullptr);
@@ -241,7 +259,8 @@ public:
     cmdList_->ResourceBarrier(1, &bar);
 
     const float t = static_cast<float>(info.elapsedSec);
-    const float clear[4] = {0.12f + 0.12f * std::sin(t * 1.7f), 0.10f + 0.10f * std::sin(t * 1.3f + 2.f),
+    const float clear[4] = {0.12f + 0.12f * std::sin(t * 1.7f),
+                            0.10f + 0.10f * std::sin(t * 1.3f + 2.f),
                             0.18f + 0.14f * std::sin(t * 2.1f + 4.f), 1.f};
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += SIZE_T(fi) * rtvDescriptorSize_;
@@ -279,11 +298,12 @@ public:
     cmdList_->SetGraphicsRootConstantBufferView(0, cbGpu_[fi]);
     cmdList_->DrawInstanced(6, 1, 0, 0);
 
-    if (!info.noHud) {
+    if (!info.noHud)
+    {
       char big[32];
       sprintf_s(big, "%llu", (unsigned long long)info.frameIndex);
-      DrawTextLine(fi, big, (width_ - int(strlen(big)) * 8 * 6) * 0.5f, height_ * 0.18f, 6.f, 1.f, 1.f,
-                   0.2f, 1.f);
+      DrawTextLine(fi, big, (width_ - int(strlen(big)) * 8 * 6) * 0.5f, height_ * 0.18f, 6.f, 1.f,
+                   1.f, 0.2f, 1.f);
 
       char line[256];
       float y = 8.f;
@@ -342,14 +362,16 @@ private:
 #endif
     ComPtr<IDXGIFactory4> factory;
     HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateDXGIFactory1 failed";
       return false;
     }
     factory_ = factory;
 
     hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"D3D12CreateDevice failed: " + HrMsg(hr);
       return false;
     }
@@ -357,32 +379,43 @@ private:
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     hr = device_->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateCommandQueue failed";
       return false;
     }
 
-    for (UINT i = 0; i < kFrameCount; ++i) {
-      hr = device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc_[i]));
-      if (FAILED(hr)) {
+    for (UINT i = 0; i < kFrameCount; ++i)
+    {
+      hr = device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                           IID_PPV_ARGS(&cmdAlloc_[i]));
+      if (FAILED(hr))
+      {
         *error = L"CreateCommandAllocator failed";
         return false;
       }
     }
     hr = device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc_[0].Get(), nullptr,
                                     IID_PPV_ARGS(&cmdList_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateCommandList failed";
       return false;
     }
     cmdList_->Close();
 
     hr = device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateFence failed";
       return false;
     }
     fenceEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!fenceEvent_)
+    {
+      *error = L"CreateEventW (fence) failed, GetLastError=" + std::to_wstring(GetLastError());
+      return false;
+    }
     fenceValue_ = 0;
     for (UINT i = 0; i < kFrameCount; ++i)
       fenceValues_[i] = 0;
@@ -391,7 +424,8 @@ private:
     rtvDesc.NumDescriptors = kFrameCount;
     rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     hr = device_->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&rtvHeap_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateDescriptorHeap RTV failed";
       return false;
     }
@@ -402,7 +436,8 @@ private:
     srvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     hr = device_->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&srvHeap_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateDescriptorHeap SRV failed";
       return false;
     }
@@ -420,12 +455,15 @@ private:
     scd.SampleDesc.Count = 1;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.BufferCount = kFrameCount;
-    scd.SwapEffect = cfg_.flipModel ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    scd.SwapEffect =
+        cfg_.flipModel ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
     scd.Scaling = DXGI_SCALING_STRETCH;
 
     ComPtr<IDXGISwapChain1> sc1;
-    HRESULT hr = factory_->CreateSwapChainForHwnd(queue_.Get(), hwnd_, &scd, nullptr, nullptr, &sc1);
-    if (FAILED(hr)) {
+    HRESULT hr =
+        factory_->CreateSwapChainForHwnd(queue_.Get(), hwnd_, &scd, nullptr, nullptr, &sc1);
+    if (FAILED(hr))
+    {
       *error = L"CreateSwapChainForHwnd failed: " + HrMsg(hr);
       return false;
     }
@@ -438,9 +476,11 @@ private:
   bool CreateRtv(std::wstring* error)
   {
     D3D12_CPU_DESCRIPTOR_HANDLE handle = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < kFrameCount; ++i)
+    {
       HRESULT hr = swapchain_->GetBuffer(i, IID_PPV_ARGS(&renderTargets_[i]));
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         *error = L"GetBuffer failed";
         return false;
       }
@@ -458,7 +498,8 @@ private:
       err.Reset();
       HRESULT hr = D3DCompile(kShaderSrc, sizeof(kShaderSrc), "d3d12.hlsl", nullptr, nullptr, entry,
                               target, 0, 0, &out, &err);
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         std::string m = "D3DCompile failed ";
         m += entry;
         if (err)
@@ -507,20 +548,24 @@ private:
 
     ComPtr<ID3DBlob> rsBlob, rsErr;
     HRESULT hr = D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &rsBlob, &rsErr);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"SerializeRootSignature failed";
       return false;
     }
     hr = device_->CreateRootSignature(0, rsBlob->GetBufferPointer(), rsBlob->GetBufferSize(),
                                       IID_PPV_ARGS(&rootSig_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateRootSignature failed";
       return false;
     }
 
     D3D12_INPUT_ELEMENT_DESC ied[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+         0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+         0},
     };
 
     auto makePso = [&](ID3DBlob* ps, bool blend, ComPtr<ID3D12PipelineState>& out) -> bool {
@@ -529,7 +574,8 @@ private:
       pd.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
       pd.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
       pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-      if (blend) {
+      if (blend)
+      {
         pd.BlendState.RenderTarget[0].BlendEnable = TRUE;
         pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
         pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
@@ -548,7 +594,8 @@ private:
       pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
       pd.SampleDesc.Count = 1;
       HRESULT h = device_->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&out));
-      if (FAILED(h)) {
+      if (FAILED(h))
+      {
         *error = L"CreateGraphicsPipelineState failed";
         return false;
       }
@@ -566,7 +613,8 @@ private:
     constexpr int cols = 16, rows = 6;
     constexpr int aw = cols * 8, ah = rows * 8;
     std::vector<uint8_t> pixels(aw * ah, 0);
-    for (int gi = 0; gi < font8x8::kCount; ++gi) {
+    for (int gi = 0; gi < font8x8::kCount; ++gi)
+    {
       const int gx = (gi % cols) * 8, gy = (gi / cols) * 8;
       const uint8_t* g = font8x8::kGlyphs[gi];
       for (int row = 0; row < 8; ++row)
@@ -589,7 +637,8 @@ private:
     HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
                                                   D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                                   IID_PPV_ARGS(&fontTex_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"Create font tex failed";
       return false;
     }
@@ -605,9 +654,11 @@ private:
     ub.SampleDesc.Count = 1;
     ub.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     D3D12_HEAP_PROPERTIES up = {D3D12_HEAP_TYPE_UPLOAD};
-    hr = device_->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &ub, D3D12_RESOURCE_STATE_GENERIC_READ,
-                                          nullptr, IID_PPV_ARGS(&fontUpload_));
-    if (FAILED(hr)) {
+    hr = device_->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &ub,
+                                          D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                          IID_PPV_ARGS(&fontUpload_));
+    if (FAILED(hr))
+    {
       *error = L"Create font upload failed";
       return false;
     }
@@ -650,13 +701,14 @@ private:
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srv.Texture2D.MipLevels = 1;
-    device_->CreateShaderResourceView(fontTex_.Get(), &srv, srvHeap_->GetCPUDescriptorHandleForHeapStart());
+    device_->CreateShaderResourceView(fontTex_.Get(), &srv,
+                                      srvHeap_->GetCPUDescriptorHandleForHeapStart());
     return true;
   }
 
   bool CreateGeometry(std::wstring* error)
   {
-    // Unit quad + room for dynamic text quads in one upload buffer rewritten each frame? 
+    // Unit quad + room for dynamic text quads in one upload buffer rewritten each frame?
     // Static unit quad only; text uses same unit quad with different CB/UV via root constants —
     // UV baked in verts so text needs dynamic VB. Create upload VB large enough for 512 glyphs.
     const UINT vbBytes = sizeof(Vertex) * 6 * 512;
@@ -672,7 +724,8 @@ private:
     HRESULT hr = device_->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &bd,
                                                   D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                                   IID_PPV_ARGS(&vb_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"Create VB failed";
       return false;
     }
@@ -688,13 +741,15 @@ private:
     memcpy(p, unit, sizeof(unit));
     vb_->Unmap(0, nullptr);
 
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < kFrameCount; ++i)
+    {
       D3D12_RESOURCE_DESC cbd = bd;
       cbd.Width = (sizeof(CBData) + 255) & ~255;
       hr = device_->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &cbd,
                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                             IID_PPV_ARGS(&cb_[i]));
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         *error = L"Create CB failed";
         return false;
       }
@@ -715,8 +770,8 @@ private:
     cb_[fi]->Unmap(0, nullptr);
   }
 
-  void DrawTextLine(UINT fi, const char* text, float x, float y, float scale, float r, float g, float b,
-                    float a)
+  void DrawTextLine(UINT fi, const char* text, float x, float y, float scale, float r, float g,
+                    float b, float a)
   {
     if (!text || !*text)
       return;
@@ -732,7 +787,8 @@ private:
     vb_->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
     int giBase = 6;
     int count = 0;
-    for (const char* p = text; *p && count < 500; ++p, ++count) {
+    for (const char* p = text; *p && count < 500; ++p, ++count)
+    {
       unsigned char ch = (unsigned char)*p;
       if (ch < 32 || ch > 127)
         ch = '?';
@@ -772,19 +828,26 @@ private:
 
   void WaitGpu()
   {
+    if (!queue_ || !fence_ || !fenceEvent_)
+      return;
     const UINT64 v = ++fenceValue_;
-    queue_->Signal(fence_.Get(), v);
-    if (fence_->GetCompletedValue() < v) {
-      fence_->SetEventOnCompletion(v, fenceEvent_);
-      WaitForSingleObject(fenceEvent_, INFINITE);
+    if (FAILED(queue_->Signal(fence_.Get(), v)))
+      return;
+    if (fence_->GetCompletedValue() < v)
+    {
+      if (SUCCEEDED(fence_->SetEventOnCompletion(v, fenceEvent_)))
+        WaitForSingleObject(fenceEvent_, INFINITE);
     }
   }
 
   void WaitFrame(UINT fi)
   {
-    if (fence_->GetCompletedValue() < fenceValues_[fi]) {
-      fence_->SetEventOnCompletion(fenceValues_[fi], fenceEvent_);
-      WaitForSingleObject(fenceEvent_, INFINITE);
+    if (!fence_ || !fenceEvent_)
+      return;
+    if (fence_->GetCompletedValue() < fenceValues_[fi])
+    {
+      if (SUCCEEDED(fence_->SetEventOnCompletion(fenceValues_[fi], fenceEvent_)))
+        WaitForSingleObject(fenceEvent_, INFINITE);
     }
   }
 

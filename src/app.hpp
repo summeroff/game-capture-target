@@ -8,7 +8,8 @@
 
 #include <Windows.h>
 
-class App {
+class App
+{
 public:
   explicit App(Config cfg);
   ~App();
