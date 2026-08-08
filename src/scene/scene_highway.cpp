@@ -21,6 +21,10 @@ constexpr float kZNear = 1.2f;
 constexpr float kZFar = 90.f;
 constexpr float kRoadHalf = 1.35f; // world units half-width (~3 lanes)
 constexpr float kLaneW = (kRoadHalf * 2.f) / 3.f;
+// Keep cam/posts/cars Z from growing without bound (float cancel on z - camZ).
+constexpr float kCamZWrap = 4096.f;
+// Projected object scale divisor: screen size ≈ (focal / relZ) / kScaleDiv.
+constexpr float kScaleDiv = 40.f;
 
 struct Star
 {
@@ -392,9 +396,8 @@ private:
     const float inv = focal / relZ;
     *sx = cx + worldX * inv;
     *sy = horizonY + inv; // camH=1
-    *scale = inv / focal; // 1/z normalized-ish; multiply by pixel constants
-    // Better object scale: proportional to focal/z
-    *scale = inv / 40.f;
+    // Pixel size factor from perspective: (focal/z) / kScaleDiv.
+    *scale = inv / kScaleDiv;
     if (*sy < horizonY - 5.f || *sy > h_ + 40.f)
       return false;
     if (*sx < -80.f || *sx > w_ + 80.f)
@@ -553,6 +556,18 @@ private:
     speedKmh_ = Lerp(speedKmh_, targetSpeed_, 0.35f * dt);
     const float worldSpeed = speedKmh_ * 0.045f; // scale km/h → world units/s
     camZ_ += worldSpeed * dt;
+    // Rebase absolute Z so long runs don't lose float precision on (z - camZ_).
+    if (camZ_ >= kCamZWrap)
+    {
+      camZ_ -= kCamZWrap;
+      for (auto& p : posts_)
+        p.z -= kCamZWrap;
+      for (auto& c : cars_)
+      {
+        if (c.alive)
+          c.z -= kCamZWrap;
+      }
+    }
     odo_ += speedKmh_ * dt / 3600.f * 100.f; // arbitrary progress units
     playerBob_ += dt * (8.f + speedKmh_ * 0.04f);
 
