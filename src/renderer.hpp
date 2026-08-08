@@ -8,7 +8,8 @@
 
 #include <Windows.h>
 
-struct FrameInfo {
+struct FrameInfo
+{
   uint64_t frameIndex = 0;
   double elapsedSec = 0.0;
   int clientW = 0;
@@ -24,7 +25,8 @@ struct FrameInfo {
 };
 
 // Graphics backend behind a thin interface so d3d12/opengl can be added later.
-class IRenderer {
+class IRenderer
+{
 public:
   virtual ~IRenderer() = default;
 

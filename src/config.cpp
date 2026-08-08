@@ -7,7 +7,8 @@
 #include <fstream>
 #include <string>
 
-namespace {
+namespace
+{
 
 bool EqI(const std::wstring& a, const wchar_t* b)
 {
@@ -16,11 +17,13 @@ bool EqI(const std::wstring& a, const wchar_t* b)
 
 bool ParseBool(const std::wstring& v, bool* out)
 {
-  if (EqI(v, L"1") || EqI(v, L"true") || EqI(v, L"yes") || EqI(v, L"on")) {
+  if (EqI(v, L"1") || EqI(v, L"true") || EqI(v, L"yes") || EqI(v, L"on"))
+  {
     *out = true;
     return true;
   }
-  if (EqI(v, L"0") || EqI(v, L"false") || EqI(v, L"no") || EqI(v, L"off")) {
+  if (EqI(v, L"0") || EqI(v, L"false") || EqI(v, L"no") || EqI(v, L"off"))
+  {
     *out = false;
     return true;
   }
@@ -39,15 +42,18 @@ bool ParseInt(const std::wstring& v, int* out)
 
 bool ParseMode(const std::wstring& v, WindowMode* out)
 {
-  if (EqI(v, L"windowed")) {
+  if (EqI(v, L"windowed"))
+  {
     *out = WindowMode::Windowed;
     return true;
   }
-  if (EqI(v, L"borderless")) {
+  if (EqI(v, L"borderless"))
+  {
     *out = WindowMode::Borderless;
     return true;
   }
-  if (EqI(v, L"fullscreen-exclusive") || EqI(v, L"fullscreen") || EqI(v, L"exclusive")) {
+  if (EqI(v, L"fullscreen-exclusive") || EqI(v, L"fullscreen") || EqI(v, L"exclusive"))
+  {
     *out = WindowMode::FullscreenExclusive;
     return true;
   }
@@ -56,129 +62,164 @@ bool ParseMode(const std::wstring& v, WindowMode* out)
 
 bool ParseApi(const std::wstring& v, GraphicsApi* out)
 {
-  if (EqI(v, L"d3d11") || EqI(v, L"dx11")) {
+  if (EqI(v, L"d3d11") || EqI(v, L"dx11"))
+  {
     *out = GraphicsApi::D3D11;
     return true;
   }
-  if (EqI(v, L"d3d12") || EqI(v, L"dx12")) {
+  if (EqI(v, L"d3d12") || EqI(v, L"dx12"))
+  {
     *out = GraphicsApi::D3D12;
     return true;
   }
-  if (EqI(v, L"vulkan") || EqI(v, L"vk")) {
+  if (EqI(v, L"vulkan") || EqI(v, L"vk"))
+  {
     *out = GraphicsApi::Vulkan;
     return true;
   }
-  if (EqI(v, L"d3d9") || EqI(v, L"dx9")) {
+  if (EqI(v, L"d3d9") || EqI(v, L"dx9"))
+  {
     *out = GraphicsApi::D3D9;
     return true;
   }
-  if (EqI(v, L"opengl") || EqI(v, L"gl")) {
+  if (EqI(v, L"opengl") || EqI(v, L"gl"))
+  {
     *out = GraphicsApi::OpenGL;
     return true;
   }
-  if (EqI(v, L"none") || EqI(v, L"gdi")) {
+  if (EqI(v, L"none") || EqI(v, L"gdi"))
+  {
     *out = GraphicsApi::None;
     return true;
   }
   return false;
 }
 
-bool ApplyKeyValue(Config* c, const std::wstring& key, const std::wstring& value, std::wstring* error)
+bool ApplyKeyValue(Config* c, const std::wstring& key, const std::wstring& value,
+                   std::wstring* error)
 {
-  if (EqI(key, L"title")) {
+  if (EqI(key, L"title"))
+  {
     c->title = value;
     return true;
   }
-  if (EqI(key, L"class") || EqI(key, L"window_class")) {
+  if (EqI(key, L"class") || EqI(key, L"window_class"))
+  {
     c->windowClass = value;
     return true;
   }
-  if (EqI(key, L"width")) {
-    if (!ParseInt(value, &c->width) || c->width < 64) {
+  if (EqI(key, L"width"))
+  {
+    if (!ParseInt(value, &c->width) || c->width < 64)
+    {
       *error = L"invalid width";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"height")) {
-    if (!ParseInt(value, &c->height) || c->height < 64) {
+  if (EqI(key, L"height"))
+  {
+    if (!ParseInt(value, &c->height) || c->height < 64)
+    {
       *error = L"invalid height";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"mode")) {
-    if (!ParseMode(value, &c->mode)) {
+  if (EqI(key, L"mode"))
+  {
+    if (!ParseMode(value, &c->mode))
+    {
       *error = L"invalid mode (windowed|borderless|fullscreen-exclusive)";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"api")) {
-    if (!ParseApi(value, &c->api)) {
+  if (EqI(key, L"api"))
+  {
+    if (!ParseApi(value, &c->api))
+    {
       *error = L"invalid api (d3d11|d3d12|vulkan|none)";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"fps")) {
-    if (!ParseInt(value, &c->fps) || c->fps < 1 || c->fps > 1000) {
+  if (EqI(key, L"fps"))
+  {
+    if (!ParseInt(value, &c->fps) || c->fps < 1 || c->fps > 1000)
+    {
       *error = L"invalid fps";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"vsync")) {
-    if (!ParseBool(value, &c->vsync)) {
+  if (EqI(key, L"vsync"))
+  {
+    if (!ParseBool(value, &c->vsync))
+    {
       *error = L"invalid vsync";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"flip-model") || EqI(key, L"flip_model")) {
-    if (!ParseBool(value, &c->flipModel)) {
+  if (EqI(key, L"flip-model") || EqI(key, L"flip_model"))
+  {
+    if (!ParseBool(value, &c->flipModel))
+    {
       *error = L"invalid flip-model";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"buffers")) {
-    if (!ParseInt(value, &c->buffers) || c->buffers < 2 || c->buffers > 8) {
+  if (EqI(key, L"buffers"))
+  {
+    if (!ParseInt(value, &c->buffers) || c->buffers < 2 || c->buffers > 8)
+    {
       *error = L"invalid buffers (2-8)";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"exit-after") || EqI(key, L"exit_after")) {
-    if (!ParseInt(value, &c->exitAfterSeconds) || c->exitAfterSeconds < 0) {
+  if (EqI(key, L"exit-after") || EqI(key, L"exit_after"))
+  {
+    if (!ParseInt(value, &c->exitAfterSeconds) || c->exitAfterSeconds < 0)
+    {
       *error = L"invalid exit-after";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"topmost")) {
-    if (!ParseBool(value, &c->topmost)) {
+  if (EqI(key, L"topmost"))
+  {
+    if (!ParseBool(value, &c->topmost))
+    {
       *error = L"invalid topmost";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"no-hud") || EqI(key, L"no_hud")) {
-    if (!ParseBool(value, &c->noHud)) {
+  if (EqI(key, L"no-hud") || EqI(key, L"no_hud"))
+  {
+    if (!ParseBool(value, &c->noHud))
+    {
       *error = L"invalid no-hud";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"block-capture") || EqI(key, L"block_capture")) {
-    if (!ParseBlockCaptureMode(value, &c->blockCapture)) {
+  if (EqI(key, L"block-capture") || EqI(key, L"block_capture"))
+  {
+    if (!ParseBlockCaptureMode(value, &c->blockCapture))
+    {
       *error = L"invalid block-capture (none|signature-policy|squat-ipc|unload-hook)";
       return false;
     }
     return true;
   }
-  if (EqI(key, L"block-capture-after") || EqI(key, L"block_capture_after")) {
-    if (!ParseInt(value, &c->blockCaptureAfterSeconds) || c->blockCaptureAfterSeconds < 0) {
+  if (EqI(key, L"block-capture-after") || EqI(key, L"block_capture_after"))
+  {
+    if (!ParseInt(value, &c->blockCaptureAfterSeconds) || c->blockCaptureAfterSeconds < 0)
+    {
       *error = L"invalid block-capture-after";
       return false;
     }
@@ -192,17 +233,20 @@ bool ApplyKeyValue(Config* c, const std::wstring& key, const std::wstring& value
 bool LoadIni(const std::wstring& path, Config* c, std::wstring* error)
 {
   std::ifstream in(path);
-  if (!in) {
+  if (!in)
+  {
     *error = L"cannot open config file: " + path;
     return false;
   }
 
   std::string line;
   int lineNo = 0;
-  while (std::getline(in, line)) {
+  while (std::getline(in, line))
+  {
     ++lineNo;
     if (lineNo == 1 && line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
-        static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
+        static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF)
+    {
       line.erase(0, 3);
     }
 
@@ -246,7 +290,8 @@ bool LoadIni(const std::wstring& path, Config* c, std::wstring* error)
       MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, wv.data(), vn);
 
     std::wstring err;
-    if (!ApplyKeyValue(c, wk, wv, &err)) {
+    if (!ApplyKeyValue(c, wk, wv, &err))
+    {
       *error = L"config line " + std::to_wstring(lineNo) + L": " + err;
       return false;
     }
@@ -257,7 +302,8 @@ bool LoadIni(const std::wstring& path, Config* c, std::wstring* error)
 bool ConsumeValue(int argc, wchar_t** argv, int* i, std::wstring* out, std::wstring* error,
                   const wchar_t* flag)
 {
-  if (*i + 1 >= argc) {
+  if (*i + 1 >= argc)
+  {
     *error = std::wstring(L"missing value for ") + flag;
     return false;
   }
@@ -266,7 +312,8 @@ bool ConsumeValue(int argc, wchar_t** argv, int* i, std::wstring* out, std::wstr
   return true;
 }
 
-struct FlagSeen {
+struct FlagSeen
+{
   bool title = false;
   bool cls = false;
   bool block = false;
@@ -276,7 +323,8 @@ struct FlagSeen {
 
 const wchar_t* WindowModeName(WindowMode m)
 {
-  switch (m) {
+  switch (m)
+  {
   case WindowMode::Windowed:
     return L"windowed";
   case WindowMode::Borderless:
@@ -289,7 +337,8 @@ const wchar_t* WindowModeName(WindowMode m)
 
 const wchar_t* GraphicsApiName(GraphicsApi a)
 {
-  switch (a) {
+  switch (a)
+  {
   case GraphicsApi::D3D11:
     return L"d3d11";
   case GraphicsApi::D3D12:
@@ -308,7 +357,8 @@ const wchar_t* GraphicsApiName(GraphicsApi a)
 
 WindowMode NextWindowMode(WindowMode m)
 {
-  switch (m) {
+  switch (m)
+  {
   case WindowMode::Windowed:
     return WindowMode::Borderless;
   case WindowMode::Borderless:
@@ -408,45 +458,58 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
   // Pass 1: --config, --list-profiles, --help, --profile id (store only)
   std::wstring configPath;
   std::wstring profileId;
-  for (int i = 1; i < argc; ++i) {
-    if (EqI(argv[i], L"--config")) {
-      if (i + 1 >= argc) {
+  for (int i = 1; i < argc; ++i)
+  {
+    if (EqI(argv[i], L"--config"))
+    {
+      if (i + 1 >= argc)
+      {
         *error = L"missing value for --config";
         return false;
       }
       configPath = argv[++i];
-    } else if (EqI(argv[i], L"--profile")) {
-      if (i + 1 >= argc) {
+    } else if (EqI(argv[i], L"--profile"))
+    {
+      if (i + 1 >= argc)
+      {
         *error = L"missing value for --profile";
         return false;
       }
       profileId = argv[++i];
-    } else if (EqI(argv[i], L"--list-profiles")) {
+    } else if (EqI(argv[i], L"--list-profiles"))
+    {
       c.listProfiles = true;
-    } else if (EqI(argv[i], L"--json")) {
+    } else if (EqI(argv[i], L"--json"))
+    {
       c.listProfilesJson = true;
-    } else if (EqI(argv[i], L"--help") || EqI(argv[i], L"-h") || EqI(argv[i], L"/?")) {
+    } else if (EqI(argv[i], L"--help") || EqI(argv[i], L"-h") || EqI(argv[i], L"/?"))
+    {
       c.help = true;
     }
   }
 
-  if (c.help) {
+  if (c.help)
+  {
     *out = std::move(c);
     return true;
   }
-  if (c.listProfiles) {
+  if (c.listProfiles)
+  {
     *out = std::move(c);
     return true;
   }
 
-  if (!configPath.empty()) {
+  if (!configPath.empty())
+  {
     if (!LoadIni(configPath, &c, error))
       return false;
   }
 
-  if (!profileId.empty()) {
+  if (!profileId.empty())
+  {
     const Profile* p = FindProfile(profileId);
-    if (!p) {
+    if (!p)
+    {
       *error = L"unknown profile: " + profileId + L" (use --list-profiles)";
       return false;
     }
@@ -454,17 +517,21 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
   }
 
   // Pass 2: flags override everything
-  for (int i = 1; i < argc; ++i) {
+  for (int i = 1; i < argc; ++i)
+  {
     const std::wstring a = argv[i];
-    if (EqI(a, L"--config") || EqI(a, L"--profile")) {
+    if (EqI(a, L"--config") || EqI(a, L"--profile"))
+    {
       ++i;
       continue;
     }
     if (EqI(a, L"--list-profiles") || EqI(a, L"--json") || EqI(a, L"--help") || EqI(a, L"-h") ||
-        EqI(a, L"/?")) {
+        EqI(a, L"/?"))
+    {
       continue;
     }
-    if (EqI(a, L"--title")) {
+    if (EqI(a, L"--title"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--title"))
         return false;
@@ -472,7 +539,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
       seen.title = true;
       continue;
     }
-    if (EqI(a, L"--class")) {
+    if (EqI(a, L"--class"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--class"))
         return false;
@@ -480,7 +548,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
       seen.cls = true;
       continue;
     }
-    if (EqI(a, L"--width")) {
+    if (EqI(a, L"--width"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--width"))
         return false;
@@ -488,7 +557,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--height")) {
+    if (EqI(a, L"--height"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--height"))
         return false;
@@ -496,7 +566,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--mode")) {
+    if (EqI(a, L"--mode"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--mode"))
         return false;
@@ -504,7 +575,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--api")) {
+    if (EqI(a, L"--api"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--api"))
         return false;
@@ -512,7 +584,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--fps")) {
+    if (EqI(a, L"--fps"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--fps"))
         return false;
@@ -520,7 +593,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--vsync")) {
+    if (EqI(a, L"--vsync"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--vsync"))
         return false;
@@ -528,7 +602,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--flip-model")) {
+    if (EqI(a, L"--flip-model"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--flip-model"))
         return false;
@@ -536,7 +611,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--buffers")) {
+    if (EqI(a, L"--buffers"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--buffers"))
         return false;
@@ -544,7 +620,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--exit-after")) {
+    if (EqI(a, L"--exit-after"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--exit-after"))
         return false;
@@ -552,7 +629,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--block-capture")) {
+    if (EqI(a, L"--block-capture"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--block-capture"))
         return false;
@@ -561,7 +639,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
       seen.block = true;
       continue;
     }
-    if (EqI(a, L"--block-capture-after")) {
+    if (EqI(a, L"--block-capture-after"))
+    {
       std::wstring v;
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--block-capture-after"))
         return false;
@@ -569,15 +648,18 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       continue;
     }
-    if (EqI(a, L"--topmost")) {
+    if (EqI(a, L"--topmost"))
+    {
       c.topmost = true;
       continue;
     }
-    if (EqI(a, L"--no-hud")) {
+    if (EqI(a, L"--no-hud"))
+    {
       c.noHud = true;
       continue;
     }
-    if (EqI(a, L"--show-block-errors")) {
+    if (EqI(a, L"--show-block-errors"))
+    {
       c.showBlockErrors = true;
       continue;
     }
@@ -586,17 +668,20 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     return false;
   }
 
-  if (c.api == GraphicsApi::OpenGL || c.api == GraphicsApi::D3D9) {
+  if (c.api == GraphicsApi::OpenGL || c.api == GraphicsApi::D3D9)
+  {
     *error = std::wstring(L"api '") + GraphicsApiName(c.api) + L"' is not implemented yet";
     return false;
   }
 
-  if (c.blockCapture == BlockCaptureMode::SignaturePolicy && c.blockCaptureAfterSeconds > 0) {
+  if (c.blockCapture == BlockCaptureMode::SignaturePolicy && c.blockCaptureAfterSeconds > 0)
+  {
     Log("warn: signature-policy with --block-capture-after is one-way (cannot undo)");
   }
 
   // If profile set captureExpected based on block mode override
-  if (seen.block) {
+  if (seen.block)
+  {
     c.captureExpected = (c.blockCapture == BlockCaptureMode::None);
   }
 

@@ -19,7 +19,8 @@
 
 using Microsoft::WRL::ComPtr;
 
-namespace {
+namespace
+{
 
 constexpr char kShaderSrc[] = R"(
 cbuffer CB : register(b0)
@@ -148,12 +149,14 @@ float4 PSText(VSOut i) : SV_Target
 }
 )";
 
-struct Vertex {
+struct Vertex
+{
   float x, y;
   float u, v;
 };
 
-struct CBData {
+struct CBData
+{
   float transform[16];
   float color[4];
   float timeRes[4];
@@ -180,8 +183,10 @@ void MatOrthoPixels(float* m, float w, float h)
 void MatMul(float* out, const float* a, const float* b)
 {
   float t[16];
-  for (int c = 0; c < 4; ++c) {
-    for (int r = 0; r < 4; ++r) {
+  for (int c = 0; c < 4; ++c)
+  {
+    for (int r = 0; r < 4; ++r)
+    {
       t[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0] + a[1 * 4 + r] * b[c * 4 + 1] +
                      a[2 * 4 + r] * b[c * 4 + 2] + a[3 * 4 + r] * b[c * 4 + 3];
     }
@@ -221,7 +226,8 @@ std::wstring HrMsg(HRESULT hr)
   return buf;
 }
 
-class D3D11Renderer final : public IRenderer {
+class D3D11Renderer final : public IRenderer
+{
 public:
   ~D3D11Renderer() override { Shutdown(); }
 
@@ -279,7 +285,8 @@ public:
 
   bool RecreateSwapchain(std::wstring* error) override
   {
-    if (!device_) {
+    if (!device_)
+    {
       *error = L"no device";
       return false;
     }
@@ -289,29 +296,34 @@ public:
     rtv_.Reset();
     backbuffer_.Reset();
 
-    if (swapchain_) {
+    if (swapchain_)
+    {
       // Leave exclusive fullscreen before resize if needed.
       BOOL fs = FALSE;
       ComPtr<IDXGIOutput> out;
-      if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, &out)) && fs) {
+      if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, &out)) && fs)
+      {
         swapchain_->SetFullscreenState(FALSE, nullptr);
       }
 
       const DXGI_FORMAT fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
-      HRESULT hr = swapchain_->ResizeBuffers(static_cast<UINT>(cfg_.buffers),
-                                             static_cast<UINT>(width_), static_cast<UINT>(height_),
-                                             fmt, swapFlags_);
-      if (FAILED(hr)) {
+      HRESULT hr =
+          swapchain_->ResizeBuffers(static_cast<UINT>(cfg_.buffers), static_cast<UINT>(width_),
+                                    static_cast<UINT>(height_), fmt, swapFlags_);
+      if (FAILED(hr))
+      {
         // Fall back to full recreate.
         swapchain1_.Reset();
         swapchain_.Reset();
         if (!CreateSwapchain(error))
           return false;
-      } else {
+      } else
+      {
         if (!CreateRtv(error))
           return false;
       }
-    } else {
+    } else
+    {
       if (!CreateSwapchain(error))
         return false;
     }
@@ -402,7 +414,8 @@ public:
     // --- Outer spinning ring of orbs ---
     ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
     constexpr int kOrbs = 14;
-    for (int i = 0; i < kOrbs; ++i) {
+    for (int i = 0; i < kOrbs; ++i)
+    {
       const float a0 = t * 0.7f + i * (6.2831853f / kOrbs);
       const float radius = 180.f + 40.f * std::sin(t * 1.1f + i * 0.4f);
       const float ox = cx + std::cos(a0) * radius;
@@ -415,7 +428,8 @@ public:
     }
 
     // --- Counter-rotating inner ring ---
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 8; ++i)
+    {
       const float a0 = -t * 1.3f + i * (6.2831853f / 8);
       const float radius = 90.f + 18.f * std::cos(t * 2.0f + i);
       const float ox = cx + std::cos(a0) * radius;
@@ -427,7 +441,8 @@ public:
 
     // --- Big soft rings ---
     ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 3; ++i)
+    {
       const float pulse = 1.f + 0.12f * std::sin(t * 2.5f + i);
       const float sz = (220.f + i * 90.f) * pulse;
       float rr, gg, bb;
@@ -442,7 +457,8 @@ public:
       const float cr = 250.f + 60.f * std::sin(t * 0.6f);
       const float cox = cx + std::cos(ca) * cr;
       const float coy = cy + std::sin(ca) * cr * 0.5f;
-      for (int trail = 7; trail >= 0; --trail) {
+      for (int trail = 7; trail >= 0; --trail)
+      {
         const float ta = ca - trail * 0.08f;
         const float trr = cr - trail * 6.f;
         const float tx = cx + std::cos(ta) * trr;
@@ -461,9 +477,9 @@ public:
     ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
     constexpr int kBars = 48;
     const float barW = width_ / float(kBars);
-    for (int i = 0; i < kBars; ++i) {
-      const float n = 0.5f + 0.5f * std::sin(t * 4.0f + i * 0.45f) *
-                                 std::cos(t * 2.3f + i * 0.17f);
+    for (int i = 0; i < kBars; ++i)
+    {
+      const float n = 0.5f + 0.5f * std::sin(t * 4.0f + i * 0.45f) * std::cos(t * 2.3f + i * 0.17f);
       const float h = (30.f + n * (height_ * 0.22f));
       const float bx = (i + 0.5f) * barW;
       const float by = height_ - h * 0.5f - 8.f;
@@ -483,14 +499,16 @@ public:
     }
 
     // Large frame counter — still the capture-liveness tell.
-    if (!info.noHud) {
+    if (!info.noHud)
+    {
       ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
       char big[32];
       sprintf_s(big, "%llu", static_cast<unsigned long long>(info.frameIndex));
       const float scale = 7.f;
       const float tw = static_cast<float>(std::strlen(big)) * font8x8::kGlyphW * scale;
       // Soft shadow then bright glyph
-      DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.12f + 3.f, scale, 0.f, 0.f, 0.f, 0.55f);
+      DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.12f + 3.f, scale, 0.f, 0.f, 0.f,
+                 0.55f);
       DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.12f, scale, 1.f, 0.95f, 0.35f, 1.f);
 
       char line[256];
@@ -519,7 +537,8 @@ public:
       lines.emplace_back(line);
 
       float y = 8.f;
-      for (const auto& s : lines) {
+      for (const auto& s : lines)
+      {
         DrawTextPx(s.c_str(), 9.f, y + 1.f, 2.f, 0.f, 0.f, 0.f, 0.65f);
         DrawTextPx(s.c_str(), 8.f, y, 2.f, 0.92f, 0.95f, 1.f, 1.f);
         y += font8x8::kGlyphH * 2.f + 4.f;
@@ -537,10 +556,7 @@ public:
     return cfg_.flipModel ? L"FLIP_DISCARD" : L"DISCARD";
   }
 
-  const wchar_t* PresentModeName() const override
-  {
-    return cfg_.vsync ? L"vsync" : L"immediate";
-  }
+  const wchar_t* PresentModeName() const override { return cfg_.vsync ? L"vsync" : L"immediate"; }
 
 private:
   bool CreateDevice(std::wstring* error)
@@ -558,11 +574,13 @@ private:
     D3D_FEATURE_LEVEL got{};
     HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels,
                                    _countof(levels), D3D11_SDK_VERSION, &device_, &got, &ctx_);
-    if (FAILED(hr)) {
-      hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, levels, _countof(levels),
-                             D3D11_SDK_VERSION, &device_, &got, &ctx_);
+    if (FAILED(hr))
+    {
+      hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, levels,
+                             _countof(levels), D3D11_SDK_VERSION, &device_, &got, &ctx_);
     }
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"D3D11CreateDevice failed: " + HrMsg(hr);
       return false;
     }
@@ -574,13 +592,15 @@ private:
   {
     ComPtr<IDXGIDevice> dxgiDev;
     HRESULT hr = device_.As(&dxgiDev);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"IDXGIDevice QI failed";
       return false;
     }
     ComPtr<IDXGIAdapter> adapter;
     hr = dxgiDev->GetAdapter(&adapter);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"GetAdapter failed";
       return false;
     }
@@ -588,7 +608,8 @@ private:
     {
       ComPtr<IDXGIFactory> factory;
       hr = adapter->GetParent(IID_PPV_ARGS(&factory));
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         *error = L"GetParent factory failed";
         return false;
       }
@@ -601,7 +622,8 @@ private:
     else
       swapFlags_ = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
-    if (factory2 && cfg_.flipModel) {
+    if (factory2 && cfg_.flipModel)
+    {
       DXGI_SWAP_CHAIN_DESC1 scd{};
       scd.Width = static_cast<UINT>(width_);
       scd.Height = static_cast<UINT>(height_);
@@ -620,18 +642,22 @@ private:
       fs.RefreshRate.Denominator = 1;
 
       hr = factory2->CreateSwapChainForHwnd(device_.Get(), hwnd_, &scd, &fs, nullptr, &swapchain1_);
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         Log("d3d11: FLIP_DISCARD failed (%s), falling back to DISCARD", Narrow(HrMsg(hr)).c_str());
         cfg_.flipModel = false;
-      } else {
+      } else
+      {
         swapchain1_.As(&swapchain_);
       }
     }
 
-    if (!swapchain_) {
+    if (!swapchain_)
+    {
       ComPtr<IDXGIFactory> factory;
       hr = adapter->GetParent(IID_PPV_ARGS(&factory));
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         *error = L"GetParent factory failed";
         return false;
       }
@@ -651,7 +677,8 @@ private:
       scd.Flags = swapFlags_;
 
       hr = factory->CreateSwapChain(device_.Get(), &scd, &swapchain_);
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         *error = L"CreateSwapChain failed: " + HrMsg(hr);
         return false;
       }
@@ -662,9 +689,11 @@ private:
     {
       ComPtr<IDXGIFactory> factory;
       ComPtr<IDXGIDevice> dev;
-      if (SUCCEEDED(device_.As(&dev))) {
+      if (SUCCEEDED(device_.As(&dev)))
+      {
         ComPtr<IDXGIAdapter> ad;
-        if (SUCCEEDED(dev->GetAdapter(&ad))) {
+        if (SUCCEEDED(dev->GetAdapter(&ad)))
+        {
           ad->GetParent(IID_PPV_ARGS(&factory));
           if (factory)
             factory->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER);
@@ -686,12 +715,14 @@ private:
     rtv_.Reset();
     backbuffer_.Reset();
     HRESULT hr = swapchain_->GetBuffer(0, IID_PPV_ARGS(&backbuffer_));
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"GetBuffer failed: " + HrMsg(hr);
       return false;
     }
     hr = device_->CreateRenderTargetView(backbuffer_.Get(), nullptr, &rtv_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateRenderTargetView failed: " + HrMsg(hr);
       return false;
     }
@@ -703,20 +734,25 @@ private:
     if (!swapchain_)
       return true;
 
-    if (mode_ == WindowMode::FullscreenExclusive) {
+    if (mode_ == WindowMode::FullscreenExclusive)
+    {
       HRESULT hr = swapchain_->SetFullscreenState(TRUE, nullptr);
-      if (FAILED(hr)) {
+      if (FAILED(hr))
+      {
         *error = L"SetFullscreenState(TRUE) failed: " + HrMsg(hr);
         Log("d3d11: %s", Narrow(*error).c_str());
         // Non-fatal — borderless-like still usable.
         return true;
       }
-    } else {
+    } else
+    {
       BOOL fs = FALSE;
       ComPtr<IDXGIOutput> out;
-      if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, &out)) && fs) {
+      if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, &out)) && fs)
+      {
         HRESULT hr = swapchain_->SetFullscreenState(FALSE, nullptr);
-        if (FAILED(hr)) {
+        if (FAILED(hr))
+        {
           *error = L"SetFullscreenState(FALSE) failed: " + HrMsg(hr);
           Log("d3d11: %s", Narrow(*error).c_str());
         }
@@ -735,10 +771,10 @@ private:
 
     auto compile = [&](const char* entry, const char* target, ComPtr<ID3DBlob>& out) -> bool {
       errBlob.Reset();
-      HRESULT hr =
-          D3DCompile(kShaderSrc, sizeof(kShaderSrc), "embedded.hlsl", nullptr, nullptr, entry,
-                     target, cflags, 0, &out, &errBlob);
-      if (FAILED(hr)) {
+      HRESULT hr = D3DCompile(kShaderSrc, sizeof(kShaderSrc), "embedded.hlsl", nullptr, nullptr,
+                              entry, target, cflags, 0, &out, &errBlob);
+      if (FAILED(hr))
+      {
         std::string msg = "D3DCompile ";
         msg += entry;
         msg += " failed";
@@ -766,37 +802,43 @@ private:
 
     HRESULT hr = device_->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
                                              nullptr, &vs_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateVertexShader failed";
       return false;
     }
     hr = device_->CreatePixelShader(psSolidBlob->GetBufferPointer(), psSolidBlob->GetBufferSize(),
                                     nullptr, &psSolid_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreatePixelShader solid failed";
       return false;
     }
     hr = device_->CreatePixelShader(psTextBlob->GetBufferPointer(), psTextBlob->GetBufferSize(),
                                     nullptr, &psText_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreatePixelShader text failed";
       return false;
     }
-    hr = device_->CreatePixelShader(psBgBlob->GetBufferPointer(), psBgBlob->GetBufferSize(), nullptr,
-                                    &psBg_);
-    if (FAILED(hr)) {
+    hr = device_->CreatePixelShader(psBgBlob->GetBufferPointer(), psBgBlob->GetBufferSize(),
+                                    nullptr, &psBg_);
+    if (FAILED(hr))
+    {
       *error = L"CreatePixelShader bg failed";
       return false;
     }
     hr = device_->CreatePixelShader(psOrbBlob->GetBufferPointer(), psOrbBlob->GetBufferSize(),
                                     nullptr, &psOrb_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreatePixelShader orb failed";
       return false;
     }
     hr = device_->CreatePixelShader(psRingBlob->GetBufferPointer(), psRingBlob->GetBufferSize(),
                                     nullptr, &psRing_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreatePixelShader ring failed";
       return false;
     }
@@ -807,7 +849,8 @@ private:
     };
     hr = device_->CreateInputLayout(ied, _countof(ied), vsBlob->GetBufferPointer(),
                                     vsBlob->GetBufferSize(), &layout_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateInputLayout failed";
       return false;
     }
@@ -824,7 +867,8 @@ private:
     D3D11_SUBRESOURCE_DATA sd{};
     sd.pSysMem = verts;
     hr = device_->CreateBuffer(&bd, &sd, &vb_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateBuffer vb failed";
       return false;
     }
@@ -835,7 +879,8 @@ private:
     bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = device_->CreateBuffer(&bd, nullptr, &cb_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateBuffer cb failed";
       return false;
     }
@@ -847,7 +892,8 @@ private:
     samp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
     samp.MaxLOD = D3D11_FLOAT32_MAX;
     hr = device_->CreateSamplerState(&samp, &samp_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateSamplerState failed";
       return false;
     }
@@ -863,7 +909,8 @@ private:
     bl.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     bl.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     hr = device_->CreateBlendState(&bl, &blend_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateBlendState failed";
       return false;
     }
@@ -875,7 +922,8 @@ private:
     ba.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
     ba.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
     hr = device_->CreateBlendState(&ba, &blendAdd_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateBlendState additive failed";
       return false;
     }
@@ -892,13 +940,16 @@ private:
     constexpr int ah = rows * font8x8::kGlyphH;
     std::vector<uint8_t> pixels(static_cast<size_t>(aw * ah), 0);
 
-    for (int gi = 0; gi < font8x8::kCount; ++gi) {
+    for (int gi = 0; gi < font8x8::kCount; ++gi)
+    {
       const int gx = (gi % cols) * font8x8::kGlyphW;
       const int gy = (gi / cols) * font8x8::kGlyphH;
       const uint8_t* g = font8x8::kGlyphs[gi];
-      for (int row = 0; row < font8x8::kGlyphH; ++row) {
+      for (int row = 0; row < font8x8::kGlyphH; ++row)
+      {
         const uint8_t bits = g[row];
-        for (int col = 0; col < font8x8::kGlyphW; ++col) {
+        for (int col = 0; col < font8x8::kGlyphW; ++col)
+        {
           const bool on = (bits >> col) & 1;
           pixels[static_cast<size_t>((gy + row) * aw + (gx + col))] = on ? 255 : 0;
         }
@@ -918,12 +969,14 @@ private:
     sd.pSysMem = pixels.data();
     sd.SysMemPitch = aw;
     HRESULT hr = device_->CreateTexture2D(&td, &sd, &fontTex_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateTexture2D font failed";
       return false;
     }
     hr = device_->CreateShaderResourceView(fontTex_.Get(), nullptr, &fontSrv_);
-    if (FAILED(hr)) {
+    if (FAILED(hr))
+    {
       *error = L"CreateSRV font failed";
       return false;
     }
@@ -979,7 +1032,8 @@ private:
     const float p = v * (1.f - s);
     const float q = v * (1.f - f * s);
     const float t = v * (1.f - (1.f - f) * s);
-    switch (static_cast<int>(i) % 6) {
+    switch (static_cast<int>(i) % 6)
+    {
     case 0:
       *r = v;
       *g = t;
@@ -1013,7 +1067,8 @@ private:
     }
   }
 
-  void DrawTextPx(const char* text, float x, float y, float scale, float r, float g, float b, float a)
+  void DrawTextPx(const char* text, float x, float y, float scale, float r, float g, float b,
+                  float a)
   {
     if (!text || !*text)
       return;
@@ -1028,7 +1083,8 @@ private:
 
     constexpr int cols = 16;
     float cx = x;
-    for (const char* p = text; *p; ++p) {
+    for (const char* p = text; *p; ++p)
+    {
       unsigned char ch = static_cast<unsigned char>(*p);
       if (ch < 32 || ch > 127)
         ch = '?';
@@ -1045,15 +1101,12 @@ private:
       // Easiest: create a tiny dynamic vertex buffer once and rewrite per glyph.
       EnsureDynVb();
       Vertex verts[6] = {
-          {0.f, 0.f, u0, v0},
-          {1.f, 0.f, u1, v0},
-          {1.f, 1.f, u1, v1},
-          {0.f, 0.f, u0, v0},
-          {1.f, 1.f, u1, v1},
-          {0.f, 1.f, u0, v1},
+          {0.f, 0.f, u0, v0}, {1.f, 0.f, u1, v0}, {1.f, 1.f, u1, v1},
+          {0.f, 0.f, u0, v0}, {1.f, 1.f, u1, v1}, {0.f, 1.f, u0, v1},
       };
       D3D11_MAPPED_SUBRESOURCE map{};
-      if (SUCCEEDED(ctx_->Map(dynVb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
+      if (SUCCEEDED(ctx_->Map(dynVb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+      {
         std::memcpy(map.pData, verts, sizeof(verts));
         ctx_->Unmap(dynVb_.Get(), 0);
       }

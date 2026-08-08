@@ -5,7 +5,8 @@
 #include <cstdio>
 #include <sstream>
 
-namespace {
+namespace
+{
 
 // Drawn from obs-studio/plugins/win-capture/data/compatibility.json
 const Profile kProfiles[] = {
@@ -14,22 +15,26 @@ const Profile kProfiles[] = {
 
     {"cs2-blocked", "CS2 (capture blocked)", "cs2.exe", L"FakeGameWindowClass", L"Counter-Strike 2",
      1, 1, true, false, false, BlockCaptureMode::SquatIpc,
-     "same as cs2 + squat-ipc (silent refuse; F7 reversible). Use --block-capture signature-policy for loader-level fidelity"},
+     "same as cs2 + squat-ipc (silent refuse; F7 reversible). Use --block-capture signature-policy "
+     "for loader-level fidelity"},
 
-    {"minecraft", "Minecraft: Java Edition", "javaw.exe", L"FakeGameWindowClass", L"Minecraft", 3, 0,
-     true, false, true, BlockCaptureMode::None, "exe+title prefix (try --title \"Minecraft 1.21\")"},
+    {"minecraft", "Minecraft: Java Edition", "javaw.exe", L"FakeGameWindowClass", L"Minecraft", 3,
+     0, true, false, true, BlockCaptureMode::None,
+     "exe+title prefix (try --title \"Minecraft 1.21\")"},
 
     {"wuthering", "Wuthering Waves", "Client-Win64-Shipping.exe", L"FakeGameWindowClass",
-     L"Wuthering Waves", 3, 1, true, false, true, BlockCaptureMode::None, "exe+title; admin warning"},
+     L"Wuthering Waves", 3, 1, true, false, true, BlockCaptureMode::None,
+     "exe+title; admin warning"},
 
-    {"destiny2", "Destiny 2", "destiny2.exe", L"FakeGameWindowClass", L"Destiny 2", 1, 2, true, false,
-     true, BlockCaptureMode::None, "exe; Error severity"},
+    {"destiny2", "Destiny 2", "destiny2.exe", L"FakeGameWindowClass", L"Destiny 2", 1, 2, true,
+     false, true, BlockCaptureMode::None, "exe; Error severity"},
 
     {"gta-sa", "GTA San Andreas", "gta-sa.exe", L"FakeGameWindowClass", L"GTA San Andreas", 1, 2,
      true, false, true, BlockCaptureMode::None, "exe; Error; no URL in message"},
 
-    {"chromium-gc", "Chromium (Game Capture)", "fakegame.exe", L"Chrome_WidgetWin_1", L"Chromium GC",
-     4, 2, true, false, true, BlockCaptureMode::None, "class-only Game Capture block"},
+    {"chromium-gc", "Chromium (Game Capture)", "fakegame.exe", L"Chrome_WidgetWin_1",
+     L"Chromium GC", 4, 2, true, false, true, BlockCaptureMode::None,
+     "class-only Game Capture block"},
 
     {"gaming-services", "Gaming Services (GC)", "fakegame.exe",
      L"GAMINGSERVICESUI_HOSTING_WINDOW_CLASS", L"Gaming Services", 4, 2, true, false, true,
@@ -38,14 +43,14 @@ const Profile kProfiles[] = {
     {"terraria", "Terraria", "terraria.exe", L"FakeGameWindowClass", L"Terraria", 1, 0, true, false,
      true, BlockCaptureMode::None, "exe; Normal (wrong-GPU message)"},
 
-    {"roblox", "Roblox", "RobloxPlayerBeta.exe", L"FakeGameWindowClass", L"Roblox", 1, 1, true, true,
-     true, BlockCaptureMode::None, "exe; both game + window capture entries"},
+    {"roblox", "Roblox", "RobloxPlayerBeta.exe", L"FakeGameWindowClass", L"Roblox", 1, 1, true,
+     true, true, BlockCaptureMode::None, "exe; both game + window capture entries"},
 
-    {"steam", "Steam (Window Capture)", "fakegame.exe", L"SDL_app", L"Steam", 4, 0, false, true, true,
-     BlockCaptureMode::None, "class-only; Window Capture BitBlt warning"},
+    {"steam", "Steam (Window Capture)", "fakegame.exe", L"SDL_app", L"Steam", 4, 0, false, true,
+     true, BlockCaptureMode::None, "class-only; Window Capture BitBlt warning"},
 
-    {"excel", "Microsoft Excel (Window Capture)", "fakegame.exe", L"XLMAIN", L"Microsoft Excel", 4, 0,
-     false, true, true, BlockCaptureMode::None, "class-only; Window Capture BitBlt warning"},
+    {"excel", "Microsoft Excel (Window Capture)", "fakegame.exe", L"XLMAIN", L"Microsoft Excel", 4,
+     0, false, true, true, BlockCaptureMode::None, "class-only; Window Capture BitBlt warning"},
 };
 
 std::string JsonEscape(const char* s)
@@ -53,16 +58,20 @@ std::string JsonEscape(const char* s)
   std::string o;
   if (!s)
     return o;
-  for (const char* p = s; *p; ++p) {
+  for (const char* p = s; *p; ++p)
+  {
     const unsigned char c = static_cast<unsigned char>(*p);
-    if (c == '"' || c == '\\') {
+    if (c == '"' || c == '\\')
+    {
       o.push_back('\\');
       o.push_back(static_cast<char>(c));
-    } else if (c < 0x20) {
+    } else if (c < 0x20)
+    {
       char buf[8];
       sprintf_s(buf, "\\u%04x", c);
       o += buf;
-    } else {
+    } else
+    {
       o.push_back(static_cast<char>(c));
     }
   }
@@ -78,7 +87,8 @@ std::string NarrowW(const wchar_t* w)
 
 const char* SevName(int s)
 {
-  switch (s) {
+  switch (s)
+  {
   case 0:
     return "Normal";
   case 1:
@@ -92,7 +102,8 @@ const char* SevName(int s)
 
 const char* MatchName(int f)
 {
-  switch (f) {
+  switch (f)
+  {
   case 1:
     return "exe";
   case 2:
@@ -122,7 +133,8 @@ const std::vector<Profile>& GetProfiles()
 
 const Profile* FindProfile(const std::wstring& id)
 {
-  for (const auto& p : GetProfiles()) {
+  for (const auto& p : GetProfiles())
+  {
     // compare id case-insensitive
     const std::wstring wid = std::wstring(p.id, p.id + strlen(p.id));
     if (_wcsicmp(wid.c_str(), id.c_str()) == 0)
@@ -156,7 +168,8 @@ std::string ProfilesToJson(bool pretty)
   std::ostringstream o;
   o << "[" << nl;
   const auto& list = GetProfiles();
-  for (size_t i = 0; i < list.size(); ++i) {
+  for (size_t i = 0; i < list.size(); ++i)
+  {
     const auto& p = list[i];
     o << sp << "{" << nl;
     o << sp2 << "\"id\":\"" << JsonEscape(p.id) << "\"," << nl;
@@ -184,7 +197,8 @@ void PrintProfilesTable()
 {
   std::printf("%-16s %-10s %-8s %-8s %s\n", "Profile", "Match", "Severity", "Capture", "Notes");
   std::printf("%-16s %-10s %-8s %-8s %s\n", "-------", "-----", "--------", "-------", "-----");
-  for (const auto& p : GetProfiles()) {
+  for (const auto& p : GetProfiles())
+  {
     std::printf("%-16s %-10s %-8s %-8s %s\n", p.id, MatchName(p.matchFlags), SevName(p.severity),
                 p.captureExpected ? "yes" : "NO", p.notes ? p.notes : "");
   }

@@ -5,7 +5,8 @@
 #include <string>
 #include <vector>
 
-struct Profile {
+struct Profile
+{
   const char* id = nullptr;
   const char* displayName = nullptr;
   const char* exeName = nullptr; // bare filename; empty/null => keep real exe name

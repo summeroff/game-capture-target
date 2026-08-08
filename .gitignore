@@ -1,7 +1,9 @@
 build/
 build-x86/
+build-ci/
 out/
 .vs/
+.hermes/
 *.user
 *.suo
 *.sdf

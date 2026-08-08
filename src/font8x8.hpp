@@ -5,7 +5,8 @@
 
 #include <cstdint>
 
-namespace font8x8 {
+namespace font8x8
+{
 
 inline constexpr int kGlyphW = 8;
 inline constexpr int kGlyphH = 8;

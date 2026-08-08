@@ -12,10 +12,11 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "psapi.lib")
 
-namespace {
+namespace
+{
 
 const wchar_t* kEventBases[] = {
-    L"CaptureHook_Restart", L"CaptureHook_Stop",     L"CaptureHook_HookReady",
+    L"CaptureHook_Restart", L"CaptureHook_Stop",       L"CaptureHook_HookReady",
     L"CaptureHook_Exit",    L"CaptureHook_Initialize",
 };
 
@@ -43,11 +44,13 @@ bool MakeDenyAllSa(SECURITY_ATTRIBUTES* sa, SECURITY_DESCRIPTOR* sd, PACL* aclOu
   PACL acl = static_cast<PACL>(LocalAlloc(LPTR, aclSize));
   if (!acl)
     return false;
-  if (!InitializeAcl(acl, aclSize, ACL_REVISION)) {
+  if (!InitializeAcl(acl, aclSize, ACL_REVISION))
+  {
     LocalFree(acl);
     return false;
   }
-  if (!SetSecurityDescriptorDacl(sd, TRUE, acl, FALSE)) {
+  if (!SetSecurityDescriptorDacl(sd, TRUE, acl, FALSE))
+  {
     LocalFree(acl);
     return false;
   }
@@ -68,7 +71,8 @@ void NameWithPid(wchar_t* out, size_t cch, const wchar_t* base)
 
 const wchar_t* BlockCaptureModeName(BlockCaptureMode m)
 {
-  switch (m) {
+  switch (m)
+  {
   case BlockCaptureMode::None:
     return L"none";
   case BlockCaptureMode::SignaturePolicy:
@@ -83,19 +87,23 @@ const wchar_t* BlockCaptureModeName(BlockCaptureMode m)
 
 bool ParseBlockCaptureMode(const std::wstring& v, BlockCaptureMode* out)
 {
-  if (_wcsicmp(v.c_str(), L"none") == 0) {
+  if (_wcsicmp(v.c_str(), L"none") == 0)
+  {
     *out = BlockCaptureMode::None;
     return true;
   }
-  if (_wcsicmp(v.c_str(), L"signature-policy") == 0 || _wcsicmp(v.c_str(), L"signature") == 0) {
+  if (_wcsicmp(v.c_str(), L"signature-policy") == 0 || _wcsicmp(v.c_str(), L"signature") == 0)
+  {
     *out = BlockCaptureMode::SignaturePolicy;
     return true;
   }
-  if (_wcsicmp(v.c_str(), L"squat-ipc") == 0 || _wcsicmp(v.c_str(), L"squat") == 0) {
+  if (_wcsicmp(v.c_str(), L"squat-ipc") == 0 || _wcsicmp(v.c_str(), L"squat") == 0)
+  {
     *out = BlockCaptureMode::SquatIpc;
     return true;
   }
-  if (_wcsicmp(v.c_str(), L"unload-hook") == 0 || _wcsicmp(v.c_str(), L"unload") == 0) {
+  if (_wcsicmp(v.c_str(), L"unload-hook") == 0 || _wcsicmp(v.c_str(), L"unload") == 0)
+  {
     *out = BlockCaptureMode::UnloadHook;
     return true;
   }
@@ -106,7 +114,8 @@ bool ApplySignaturePolicy(std::wstring* error)
 {
   PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy{};
   policy.MicrosoftSignedOnly = 1;
-  if (!SetProcessMitigationPolicy(ProcessSignaturePolicy, &policy, sizeof(policy))) {
+  if (!SetProcessMitigationPolicy(ProcessSignaturePolicy, &policy, sizeof(policy)))
+  {
     const DWORD err = GetLastError();
     *error = L"SetProcessMitigationPolicy(ProcessSignaturePolicy) failed, GetLastError=" +
              std::to_wstring(err);
@@ -125,7 +134,8 @@ bool ApplySquatIpc(std::wstring* error)
   SECURITY_DESCRIPTOR sd{};
   SECURITY_ATTRIBUTES sa{};
   PACL acl = nullptr;
-  if (!MakeDenyAllSa(&sa, &sd, &acl)) {
+  if (!MakeDenyAllSa(&sa, &sd, &acl))
+  {
     *error = L"failed to build deny-all SECURITY_ATTRIBUTES";
     return false;
   }
@@ -143,7 +153,8 @@ bool ApplySquatIpc(std::wstring* error)
   };
 
   wchar_t name[128];
-  for (const wchar_t* base : kEventBases) {
+  for (const wchar_t* base : kEventBases)
+  {
     NameWithPid(name, _countof(name), base);
     HANDLE h = CreateEventW(&sa, FALSE, FALSE, name);
     if (!h)
@@ -151,7 +162,8 @@ bool ApplySquatIpc(std::wstring* error)
     created.push_back(h);
     Log("block: squat-ipc event %s", Narrow(name).c_str());
   }
-  for (const wchar_t* base : kMutexBases) {
+  for (const wchar_t* base : kMutexBases)
+  {
     NameWithPid(name, _countof(name), base);
     HANDLE h = CreateMutexW(&sa, FALSE, name);
     if (!h)
@@ -159,7 +171,8 @@ bool ApplySquatIpc(std::wstring* error)
     created.push_back(h);
     Log("block: squat-ipc mutex %s", Narrow(name).c_str());
   }
-  for (const wchar_t* base : kMapBases) {
+  for (const wchar_t* base : kMapBases)
+  {
     NameWithPid(name, _countof(name), base);
     HANDLE h = CreateFileMappingW(INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE, 0, 4096, name);
     if (!h)
@@ -180,7 +193,8 @@ void ReleaseSquatIpc()
 {
   if (!g_squatActive)
     return;
-  for (HANDLE h : g_squatHandles) {
+  for (HANDLE h : g_squatHandles)
+  {
     if (h)
       CloseHandle(h);
   }
@@ -203,17 +217,21 @@ bool TryUnloadGraphicsHook()
 
   const unsigned count = needed / sizeof(HMODULE);
   bool unloaded = false;
-  for (unsigned i = 0; i < count; ++i) {
+  for (unsigned i = 0; i < count; ++i)
+  {
     wchar_t path[MAX_PATH]{};
     if (!GetModuleFileNameW(mods[i], path, MAX_PATH))
       continue;
     const wchar_t* base = wcsrchr(path, L'\\');
     base = base ? base + 1 : path;
-    if (_wcsnicmp(base, L"graphics-hook", 13) == 0) {
+    if (_wcsnicmp(base, L"graphics-hook", 13) == 0)
+    {
       Log("block: unload-hook FreeLibrary %s", Narrow(base).c_str());
-      if (FreeLibrary(mods[i])) {
+      if (FreeLibrary(mods[i]))
+      {
         unloaded = true;
-      } else {
+      } else
+      {
         Log("block: FreeLibrary failed err=%lu", GetLastError());
       }
     }
@@ -231,13 +249,15 @@ void PollHookModules(bool logAttempts)
 
   bool present = false;
   const unsigned count = needed / sizeof(HMODULE);
-  for (unsigned i = 0; i < count; ++i) {
+  for (unsigned i = 0; i < count; ++i)
+  {
     wchar_t path[MAX_PATH]{};
     if (!GetModuleFileNameW(mods[i], path, MAX_PATH))
       continue;
     const wchar_t* base = wcsrchr(path, L'\\');
     base = base ? base + 1 : path;
-    if (_wcsnicmp(base, L"graphics-hook", 13) == 0) {
+    if (_wcsnicmp(base, L"graphics-hook", 13) == 0)
+    {
       present = true;
       if (logAttempts && !s_seen)
         Log("block: observed hook module loaded: %s", Narrow(base).c_str());

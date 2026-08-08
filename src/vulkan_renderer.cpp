@@ -13,9 +13,11 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_win32.h>
 
-namespace {
+namespace
+{
 
-struct VkApi {
+struct VkApi
+{
   HMODULE mod = nullptr;
 #define V(n) PFN_##n n = nullptr;
   V(vkGetInstanceProcAddr)
@@ -145,7 +147,8 @@ struct VkApi {
 
   void Unload()
   {
-    if (mod) {
+    if (mod)
+    {
       FreeLibrary(mod);
       mod = nullptr;
     }
@@ -208,7 +211,8 @@ static const uint32_t kVertSpv[] = {
 // frame so capture of the client still shows cycling color, and title shows the counter for
 // window-capture tests. For game capture the clear color cycling is the live signal.
 
-class VulkanRenderer final : public IRenderer {
+class VulkanRenderer final : public IRenderer
+{
 public:
   ~VulkanRenderer() override { Shutdown(); }
 
@@ -219,7 +223,8 @@ public:
     width_ = cfg.width > 0 ? cfg.width : 1280;
     height_ = cfg.height > 0 ? cfg.height : 720;
 
-    if (!api_.Load()) {
+    if (!api_.Load())
+    {
       *error = L"LoadLibrary(vulkan-1.dll) failed — install a Vulkan runtime";
       return false;
     }
@@ -236,7 +241,8 @@ public:
     ici.enabledExtensionCount = 2;
     ici.ppEnabledExtensionNames = instExt;
     VkResult r = api_.vkCreateInstance(&ici, nullptr, &instance_);
-    if (r != VK_SUCCESS) {
+    if (r != VK_SUCCESS)
+    {
       *error = L"vkCreateInstance failed";
       return false;
     }
@@ -247,14 +253,16 @@ public:
     sci.hinstance = GetModuleHandleW(nullptr);
     sci.hwnd = hwnd_;
     r = api_.vkCreateWin32SurfaceKHR(instance_, &sci, nullptr, &surface_);
-    if (r != VK_SUCCESS) {
+    if (r != VK_SUCCESS)
+    {
       *error = L"vkCreateWin32SurfaceKHR failed";
       return false;
     }
 
     uint32_t devCount = 0;
     api_.vkEnumeratePhysicalDevices(instance_, &devCount, nullptr);
-    if (!devCount) {
+    if (!devCount)
+    {
       *error = L"no Vulkan physical devices";
       return false;
     }
@@ -267,15 +275,18 @@ public:
     std::vector<VkQueueFamilyProperties> qprops(qCount);
     api_.vkGetPhysicalDeviceQueueFamilyProperties(phys_, &qCount, qprops.data());
     graphicsFamily_ = UINT32_MAX;
-    for (uint32_t i = 0; i < qCount; ++i) {
+    for (uint32_t i = 0; i < qCount; ++i)
+    {
       VkBool32 present = VK_FALSE;
       api_.vkGetPhysicalDeviceSurfaceSupportKHR(phys_, i, surface_, &present);
-      if ((qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
+      if ((qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present)
+      {
         graphicsFamily_ = i;
         break;
       }
     }
-    if (graphicsFamily_ == UINT32_MAX) {
+    if (graphicsFamily_ == UINT32_MAX)
+    {
       *error = L"no graphics+present queue family";
       return false;
     }
@@ -294,7 +305,8 @@ public:
     dci.enabledExtensionCount = 1;
     dci.ppEnabledExtensionNames = devExt;
     r = api_.vkCreateDevice(phys_, &dci, nullptr, &device_);
-    if (r != VK_SUCCESS) {
+    if (r != VK_SUCCESS)
+    {
       *error = L"vkCreateDevice failed";
       return false;
     }
@@ -319,23 +331,28 @@ public:
     if (device_)
       api_.vkDeviceWaitIdle(device_);
     DestroySwapchainObjects();
-    if (cmdPool_) {
+    if (cmdPool_)
+    {
       api_.vkDestroyCommandPool(device_, cmdPool_, nullptr);
       cmdPool_ = VK_NULL_HANDLE;
     }
-    if (renderPass_) {
+    if (renderPass_)
+    {
       api_.vkDestroyRenderPass(device_, renderPass_, nullptr);
       renderPass_ = VK_NULL_HANDLE;
     }
-    if (device_) {
+    if (device_)
+    {
       api_.vkDestroyDevice(device_, nullptr);
       device_ = VK_NULL_HANDLE;
     }
-    if (surface_) {
+    if (surface_)
+    {
       api_.vkDestroySurfaceKHR(instance_, surface_, nullptr);
       surface_ = VK_NULL_HANDLE;
     }
-    if (instance_) {
+    if (instance_)
+    {
       api_.vkDestroyInstance(instance_, nullptr);
       instance_ = VK_NULL_HANDLE;
     }
@@ -391,7 +408,8 @@ public:
     if (!device_ || images_.empty())
       return;
 
-    if (cmdsDirty_) {
+    if (cmdsDirty_)
+    {
       RecordCommands();
       cmdsDirty_ = false;
     }
@@ -405,7 +423,8 @@ public:
     uint32_t imageIndex = 0;
     VkResult ar = api_.vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, imageAvailable_,
                                              VK_NULL_HANDLE, &imageIndex);
-    if (ar == VK_ERROR_OUT_OF_DATE_KHR) {
+    if (ar == VK_ERROR_OUT_OF_DATE_KHR)
+    {
       std::wstring err;
       RecreateSwapchain(&err);
       return;
@@ -433,7 +452,8 @@ public:
     api_.vkQueuePresentKHR(queue_, &pi);
 
     // Frame counter in title so a frozen capture is obvious even without glyph atlas.
-    if (!info.noHud && (info.frameIndex % 2) == 0) {
+    if (!info.noHud && (info.frameIndex % 2) == 0)
+    {
       wchar_t title[512];
       swprintf_s(title, L"%s | vk frame %llu | %.1fs", info.windowTitle.c_str(),
                  (unsigned long long)info.frameIndex, info.elapsedSec);
@@ -443,12 +463,16 @@ public:
 
   const wchar_t* ApiName() const override { return L"vulkan"; }
   const wchar_t* SwapEffectName() const override { return L"FIFO/MAILBOX"; }
-  const wchar_t* PresentModeName() const override { return cfg_.vsync ? L"FIFO" : L"MAILBOX/IMMEDIATE"; }
+  const wchar_t* PresentModeName() const override
+  {
+    return cfg_.vsync ? L"FIFO" : L"MAILBOX/IMMEDIATE";
+  }
 
 private:
   void DestroySwapchainObjects()
   {
-    if (device_ && !cmdBufs_.empty() && cmdPool_) {
+    if (device_ && !cmdBufs_.empty() && cmdPool_)
+    {
       api_.vkFreeCommandBuffers(device_, cmdPool_, (uint32_t)cmdBufs_.size(), cmdBufs_.data());
       cmdBufs_.clear();
     }
@@ -461,19 +485,23 @@ private:
         api_.vkDestroyImageView(device_, v, nullptr);
     views_.clear();
     images_.clear();
-    if (swapchain_) {
+    if (swapchain_)
+    {
       api_.vkDestroySwapchainKHR(device_, swapchain_, nullptr);
       swapchain_ = VK_NULL_HANDLE;
     }
-    if (imageAvailable_) {
+    if (imageAvailable_)
+    {
       api_.vkDestroySemaphore(device_, imageAvailable_, nullptr);
       imageAvailable_ = VK_NULL_HANDLE;
     }
-    if (renderFinished_) {
+    if (renderFinished_)
+    {
       api_.vkDestroySemaphore(device_, renderFinished_, nullptr);
       renderFinished_ = VK_NULL_HANDLE;
     }
-    if (inFlight_) {
+    if (inFlight_)
+    {
       api_.vkDestroyFence(device_, inFlight_, nullptr);
       inFlight_ = VK_NULL_HANDLE;
     }
@@ -489,7 +517,8 @@ private:
     api_.vkGetPhysicalDeviceSurfaceFormatsKHR(phys_, surface_, &fmtCount, formats.data());
     VkSurfaceFormatKHR fmt = formats[0];
     for (auto& f : formats)
-      if (f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) {
+      if (f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM)
+      {
         fmt = f;
         break;
       }
@@ -500,21 +529,25 @@ private:
     std::vector<VkPresentModeKHR> pms(pmCount);
     api_.vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &pmCount, pms.data());
     presentMode_ = VK_PRESENT_MODE_FIFO_KHR;
-    if (!cfg_.vsync) {
+    if (!cfg_.vsync)
+    {
       for (auto pm : pms)
-        if (pm == VK_PRESENT_MODE_MAILBOX_KHR) {
+        if (pm == VK_PRESENT_MODE_MAILBOX_KHR)
+        {
           presentMode_ = pm;
           break;
         }
       if (presentMode_ == VK_PRESENT_MODE_FIFO_KHR)
         for (auto pm : pms)
-          if (pm == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+          if (pm == VK_PRESENT_MODE_IMMEDIATE_KHR)
+          {
             presentMode_ = pm;
             break;
           }
     }
 
-    if (caps.currentExtent.width != UINT32_MAX) {
+    if (caps.currentExtent.width != UINT32_MAX)
+    {
       width_ = caps.currentExtent.width;
       height_ = caps.currentExtent.height;
     }
@@ -528,7 +561,7 @@ private:
     ci.minImageCount = imgCount;
     ci.imageFormat = fmt.format;
     ci.imageColorSpace = fmt.colorSpace;
-    ci.imageExtent = { (uint32_t)width_, (uint32_t)height_ };
+    ci.imageExtent = {(uint32_t)width_, (uint32_t)height_};
     ci.imageArrayLayers = 1;
     ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -537,7 +570,8 @@ private:
     ci.presentMode = presentMode_;
     ci.clipped = VK_TRUE;
     VkResult r = api_.vkCreateSwapchainKHR(device_, &ci, nullptr, &swapchain_);
-    if (r != VK_SUCCESS) {
+    if (r != VK_SUCCESS)
+    {
       *error = L"vkCreateSwapchainKHR failed";
       return false;
     }
@@ -547,7 +581,8 @@ private:
     images_.resize(n);
     api_.vkGetSwapchainImagesKHR(device_, swapchain_, &n, images_.data());
     views_.resize(n);
-    for (uint32_t i = 0; i < n; ++i) {
+    for (uint32_t i = 0; i < n; ++i)
+    {
       VkImageViewCreateInfo vi{};
       vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
       vi.image = images_[i];
@@ -557,7 +592,8 @@ private:
       vi.subresourceRange.levelCount = 1;
       vi.subresourceRange.layerCount = 1;
       r = api_.vkCreateImageView(device_, &vi, nullptr, &views_[i]);
-      if (r != VK_SUCCESS) {
+      if (r != VK_SUCCESS)
+      {
         *error = L"vkCreateImageView failed";
         return false;
       }
@@ -602,7 +638,8 @@ private:
     rp.pSubpasses = &sub;
     rp.dependencyCount = 1;
     rp.pDependencies = &dep;
-    if (api_.vkCreateRenderPass(device_, &rp, nullptr, &renderPass_) != VK_SUCCESS) {
+    if (api_.vkCreateRenderPass(device_, &rp, nullptr, &renderPass_) != VK_SUCCESS)
+    {
       *error = L"vkCreateRenderPass failed";
       return false;
     }
@@ -612,7 +649,8 @@ private:
   bool CreateFramebuffers(std::wstring* error)
   {
     framebuffers_.resize(views_.size());
-    for (size_t i = 0; i < views_.size(); ++i) {
+    for (size_t i = 0; i < views_.size(); ++i)
+    {
       VkFramebufferCreateInfo fi{};
       fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
       fi.renderPass = renderPass_;
@@ -621,7 +659,8 @@ private:
       fi.width = width_;
       fi.height = height_;
       fi.layers = 1;
-      if (api_.vkCreateFramebuffer(device_, &fi, nullptr, &framebuffers_[i]) != VK_SUCCESS) {
+      if (api_.vkCreateFramebuffer(device_, &fi, nullptr, &framebuffers_[i]) != VK_SUCCESS)
+      {
         *error = L"vkCreateFramebuffer failed";
         return false;
       }
@@ -635,7 +674,8 @@ private:
     pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pci.queueFamilyIndex = graphicsFamily_;
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    if (api_.vkCreateCommandPool(device_, &pci, nullptr, &cmdPool_) != VK_SUCCESS) {
+    if (api_.vkCreateCommandPool(device_, &pci, nullptr, &cmdPool_) != VK_SUCCESS)
+    {
       *error = L"vkCreateCommandPool failed";
       return false;
     }
@@ -645,7 +685,8 @@ private:
     ai.commandPool = cmdPool_;
     ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     ai.commandBufferCount = (uint32_t)cmdBufs_.size();
-    if (api_.vkAllocateCommandBuffers(device_, &ai, cmdBufs_.data()) != VK_SUCCESS) {
+    if (api_.vkAllocateCommandBuffers(device_, &ai, cmdBufs_.data()) != VK_SUCCESS)
+    {
       *error = L"vkAllocateCommandBuffers failed";
       return false;
     }
@@ -664,7 +705,8 @@ private:
     // Moving accent: pulse alpha of clear green channel harder so freeze is obvious.
     clear.color.float32[1] += 0.25f * (0.5f + 0.5f * std::sin(t * 8.f));
 
-    for (size_t i = 0; i < cmdBufs_.size(); ++i) {
+    for (size_t i = 0; i < cmdBufs_.size(); ++i)
+    {
       VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       api_.vkBeginCommandBuffer(cmdBufs_[i], &bi);
       VkRenderPassBeginInfo rp{};

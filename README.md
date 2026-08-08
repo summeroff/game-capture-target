@@ -164,13 +164,37 @@ Prefer `launch.ps1` for profile-aware QA.
 
 OBS/Streamlabs UI checks (warning text, blank preview, F7 restore) need a human with SLD open.
 
+## CI / code style
+
+GitHub Actions (`.github/workflows/ci.yml`) on push/PR to `master`:
+
+| Job | What |
+|-----|------|
+| **Format** | Ubuntu + `clang-format` via `scripts/format.sh --check` |
+| **Build & smoke (x64)** | VS 2022 Release + `scripts/ci-smoke.ps1` (help, profiles JSON, d3d11/d3d12/none, flip-model 0, squat-ipc, cs2 profile; vulkan optional) |
+| **Build (Win32)** | x86 Release + short d3d11/none smoke |
+
+Brace style is **Allman** (`{` / `}` on their own line) with **`} else {`** / **`} else if`** allowed joined. See `CODING_STYLE.md` and `.clang-format`.
+
+```bat
+scripts\format.bat
+scripts\format.bat --check
+scripts\ci-smoke.ps1
+```
+
+Workflow for changes: feature branch → PR → leave open for Copilot/human review (do not auto-merge).
+
 ## Layout
 
 ```
 CMakeLists.txt
 PROMPT.md
 README.md
+CODING_STYLE.md
+.clang-format
+.github/workflows/ci.yml
 scripts/build.bat  build-x86.bat  build-wx.bat  verify.bat
+scripts/format.bat format.sh  ci-smoke.ps1
 tools/launch.ps1   spawn-as.ps1
 third_party/Vulkan-Headers/   # vendored Khronos headers
 src/

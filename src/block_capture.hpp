@@ -4,7 +4,8 @@
 
 #include <Windows.h>
 
-enum class BlockCaptureMode {
+enum class BlockCaptureMode
+{
   None,
   SignaturePolicy,
   SquatIpc,
