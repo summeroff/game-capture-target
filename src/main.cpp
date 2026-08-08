@@ -52,6 +52,12 @@ int wmain(int argc, wchar_t** argv)
     return 0;
   }
 
+  if (cfg.listScenes)
+  {
+    scene::PrintSceneList();
+    return 0;
+  }
+
   // Suppress Windows hard-error boxes for failed DLL loads (e.g. signature-policy
   // rejecting graphics-hook*.dll with STATUS_INVALID_IMAGE_HASH / 0xc0000428).
   // Must be process-wide SetErrorMode — the failing load runs on OBS's inject thread.

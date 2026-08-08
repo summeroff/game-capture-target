@@ -388,6 +388,10 @@ void PrintConfig(const Config& c)
   Log("  exit-after  = %d", c.exitAfterSeconds);
   Log("  topmost     = %d", c.topmost ? 1 : 0);
   Log("  no-hud      = %d", c.noHud ? 1 : 0);
+  Log("  scene       = %s", Narrow(scene::SceneIdName(c.scene)).c_str());
+  Log("  scene-seed  = 0x%08X (%u)", c.sceneSeed, c.sceneSeed);
+  if (!c.dumpFramePath.empty())
+    Log("  dump-frame  = %s", Narrow(c.dumpFramePath).c_str());
   Log("  block-capture = %s", Narrow(BlockCaptureModeName(c.blockCapture)).c_str());
   Log("  block-after = %d", c.blockCaptureAfterSeconds);
   Log("  show-block-errors = %d", c.showBlockErrors ? 1 : 0);
@@ -415,6 +419,10 @@ Options:
   --exit-after <seconds>    Auto-quit (default: 0 = never)
   --topmost                 WS_EX_TOPMOST
   --no-hud                  Hide on-screen HUD
+  --scene <name>            Visual stress scene (default: aurora)
+  --scene-seed <u32>        Deterministic scene RNG seed (default: 0xC5A2EE)
+  --list-scenes             Print scene table
+  --dump-frame <path.bmp>   d3d11: write one framebuffer BMP after a few frames
   --config <path>           INI file; flags override file values
   --profile <name>          Apply game profile (title/class/block defaults)
   --list-profiles           Print profile table
@@ -423,6 +431,10 @@ Options:
   --block-capture-after <s> Delay before applying block (0 = immediate)
   --show-block-errors       Do not suppress Windows loader hard-error dialogs
   --help                    This help
+
+Scenes:
+  aurora   Nebula, orb rings, comet, EQ bars (default freeze-tell)
+  orbital  Drones vs asteroids, particles, explosions, screen flash
 
 Capture blocking:
   signature-policy  SetProcessMitigationPolicy(MicrosoftSignedOnly) AFTER the
@@ -455,7 +467,7 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
   Config c;
   FlagSeen seen;
 
-  // Pass 1: --config, --list-profiles, --help, --profile id (store only)
+  // Pass 1: --config, --list-profiles, --list-scenes, --help, --profile id (store only)
   std::wstring configPath;
   std::wstring profileId;
   for (int i = 1; i < argc; ++i)
@@ -479,6 +491,9 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     } else if (EqI(argv[i], L"--list-profiles"))
     {
       c.listProfiles = true;
+    } else if (EqI(argv[i], L"--list-scenes"))
+    {
+      c.listScenes = true;
     } else if (EqI(argv[i], L"--json"))
     {
       c.listProfilesJson = true;
@@ -494,6 +509,11 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     return true;
   }
   if (c.listProfiles)
+  {
+    *out = std::move(c);
+    return true;
+  }
+  if (c.listScenes)
   {
     *out = std::move(c);
     return true;
@@ -525,8 +545,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
       ++i;
       continue;
     }
-    if (EqI(a, L"--list-profiles") || EqI(a, L"--json") || EqI(a, L"--help") || EqI(a, L"-h") ||
-        EqI(a, L"/?"))
+    if (EqI(a, L"--list-profiles") || EqI(a, L"--list-scenes") || EqI(a, L"--json") ||
+        EqI(a, L"--help") || EqI(a, L"-h") || EqI(a, L"/?"))
     {
       continue;
     }
@@ -656,6 +676,42 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     if (EqI(a, L"--no-hud"))
     {
       c.noHud = true;
+      continue;
+    }
+    if (EqI(a, L"--scene"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--scene"))
+        return false;
+      if (!scene::ParseSceneId(v, &c.scene))
+      {
+        *error = L"invalid scene (use --list-scenes)";
+        return false;
+      }
+      continue;
+    }
+    if (EqI(a, L"--scene-seed"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--scene-seed"))
+        return false;
+      wchar_t* end = nullptr;
+      // Accept hex (0x…) or decimal.
+      const unsigned long n = wcstoul(v.c_str(), &end, 0);
+      if (end == v.c_str() || (end && *end != L'\0'))
+      {
+        *error = L"invalid scene-seed";
+        return false;
+      }
+      c.sceneSeed = static_cast<uint32_t>(n);
+      continue;
+    }
+    if (EqI(a, L"--dump-frame"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--dump-frame"))
+        return false;
+      c.dumpFramePath = v;
       continue;
     }
     if (EqI(a, L"--show-block-errors"))

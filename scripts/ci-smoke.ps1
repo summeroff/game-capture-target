@@ -54,6 +54,8 @@ function Invoke-Smoke {
 # Pure CLI (no window loop)
 Invoke-Smoke -Label "help" -ArgList @("--help") | Out-Null
 Invoke-Smoke -Label "list-profiles" -ArgList @("--list-profiles") | Out-Null
+Invoke-Smoke -Label "list-scenes" -ArgList @("--list-scenes") | Out-Null
+Invoke-Smoke -Label "bad scene" -ArgList @("--scene", "nope") -ExpectExit 2 | Out-Null
 
 # JSON must be parseable (profiles script contracts on this)
 Write-Host ""
@@ -77,6 +79,11 @@ Invoke-Smoke -Label "d3d11 default" -ArgList @(
   "--api", "d3d11", "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
 ) | Out-Null
 
+Invoke-Smoke -Label "d3d11 scene orbital" -ArgList @(
+  "--api", "d3d11", "--scene", "orbital", "--scene-seed", "1",
+  "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+
 Invoke-Smoke -Label "d3d11 flip-model 0" -ArgList @(
   "--api", "d3d11", "--flip-model", "0", "--exit-after", "$Seconds",
   "--width", "640", "--height", "360", "--vsync", "0"
@@ -86,9 +93,19 @@ Invoke-Smoke -Label "api none (GDI)" -ArgList @(
   "--api", "none", "--exit-after", "$Seconds", "--width", "640", "--height", "360"
 ) | Out-Null
 
+Invoke-Smoke -Label "api none orbital" -ArgList @(
+  "--api", "none", "--scene", "orbital", "--exit-after", "$Seconds",
+  "--width", "640", "--height", "360"
+) | Out-Null
+
 # d3d12: required on machines with a working D3D12 stack (GHA windows-2022 usually OK)
 Invoke-Smoke -Label "d3d12" -ArgList @(
   "--api", "d3d12", "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+
+Invoke-Smoke -Label "d3d12 orbital" -ArgList @(
+  "--api", "d3d12", "--scene", "orbital", "--scene-seed", "1",
+  "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
 ) | Out-Null
 
 # block mode that does not need OBS: just proves flag parses + process lives

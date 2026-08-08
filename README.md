@@ -119,12 +119,26 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--exit-after` | 0 | |
 | `--topmost` | off | |
 | `--no-hud` | off | |
+| `--scene <name>` | `aurora` | `aurora` \| `orbital` (more later) |
+| `--scene-seed <u32>` | `0xC5A2EE` | Deterministic scene RNG |
+| `--list-scenes` | — | Scene table |
 | `--config <path>` | — | INI; flags override |
 | `--profile <name>` | — | |
 | `--list-profiles` | — | table or with `--json` |
 | `--block-capture` | none | none \| signature-policy \| squat-ipc \| unload-hook |
 | `--block-capture-after` | 0 | seconds |
 | `--show-block-errors` | off | allow Windows loader hard-error dialogs |
+
+## Scenes (visual stress patterns)
+
+Shared CPU scene → draw-list; d3d11 is reference quality, d3d12/GDI approximate the same motion.
+
+| `--scene` | What you see | Best for |
+|-----------|--------------|----------|
+| `aurora` (default) | Nebula, orb rings, comet, EQ bars | General freeze tell |
+| `orbital` | Drones vs asteroids, explosions, flash | Particles, alpha, tiny sprites, HUD |
+
+`--scene-seed <u32>` makes orbital spawns/motion reproducible across runs.
 
 ## Hotkeys
 
@@ -199,6 +213,7 @@ tools/launch.ps1   spawn-as.ps1
 third_party/Vulkan-Headers/   # vendored Khronos headers
 src/
   main.cpp app.* config.* profiles.* block_capture.*
+  scene/   # aurora + orbital draw-list sims
   d3d11_renderer.cpp d3d12_renderer.cpp vulkan_renderer.cpp none_renderer.cpp
   renderer.hpp font8x8.hpp log.hpp
 ```

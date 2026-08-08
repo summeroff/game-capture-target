@@ -1,6 +1,7 @@
 #pragma once
 
 #include "block_capture.hpp"
+#include "scene/scene.hpp"
 
 #include <cstdint>
 #include <string>
@@ -38,6 +39,10 @@ struct Config
   bool topmost = false;
   bool noHud = false;
 
+  scene::SceneId scene = scene::SceneId::Aurora;
+  uint32_t sceneSeed = 0x00C5A2EEu;
+  std::wstring dumpFramePath; // if set, d3d11 writes one BMP after a few frames
+
   BlockCaptureMode blockCapture = BlockCaptureMode::None;
   int blockCaptureAfterSeconds = 0; // 0 = apply immediately (if mode != none)
   bool showBlockErrors = false;     // if true, skip SetErrorMode suppression
@@ -52,6 +57,7 @@ struct Config
 
   bool listProfiles = false;
   bool listProfilesJson = false;
+  bool listScenes = false;
   bool help = false;
 };
 

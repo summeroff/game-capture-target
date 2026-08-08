@@ -455,8 +455,9 @@ public:
     if (!info.noHud && (info.frameIndex % 2) == 0)
     {
       wchar_t title[512];
-      swprintf_s(title, L"%s | vk frame %llu | %.1fs", info.windowTitle.c_str(),
-                 (unsigned long long)info.frameIndex, info.elapsedSec);
+      swprintf_s(title, L"%s | vk frame %llu | %s | %.1fs", info.windowTitle.c_str(),
+                 (unsigned long long)info.frameIndex, info.sceneName ? info.sceneName : L"?",
+                 info.elapsedSec);
       SetWindowTextW(hwnd_, title);
     }
   }

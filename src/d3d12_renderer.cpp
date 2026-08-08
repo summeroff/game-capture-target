@@ -23,6 +23,7 @@ namespace
 {
 
 constexpr UINT kFrameCount = 2;
+constexpr UINT kMaxCbSlots = 512;
 
 constexpr char kShaderSrc[] = R"(
 cbuffer CB : register(b0) {
@@ -33,7 +34,8 @@ struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; };
 struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 col : COLOR0; };
 VSOut VSMain(VSIn i) {
   VSOut o;
-  o.pos = mul(float4(i.pos, 0, 1), uTransform);
+  // Column-vector convention (CPU builds p' = M * p). mul(v,M) drops translation.
+  o.pos = mul(uTransform, float4(i.pos, 0, 1));
   o.uv = i.uv;
   o.col = uColor;
   return o;
@@ -152,8 +154,15 @@ public:
     pipelineText_.Reset();
     rootSig_.Reset();
     vb_.Reset();
-    cb_[0].Reset();
-    cb_[1].Reset();
+    for (UINT i = 0; i < kFrameCount; ++i)
+    {
+      if (cbMapped_[i] && cb_[i])
+      {
+        cb_[i]->Unmap(0, nullptr);
+        cbMapped_[i] = nullptr;
+      }
+      cb_[i].Reset();
+    }
     fontTex_.Reset();
     fontUpload_.Reset();
     srvHeap_.Reset();
@@ -258,10 +267,9 @@ public:
     bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cmdList_->ResourceBarrier(1, &bar);
 
-    const float t = static_cast<float>(info.elapsedSec);
-    const float clear[4] = {0.12f + 0.12f * std::sin(t * 1.7f),
-                            0.10f + 0.10f * std::sin(t * 1.3f + 2.f),
-                            0.18f + 0.14f * std::sin(t * 2.1f + 4.f), 1.f};
+    const scene::SceneDraw* sd = info.sceneDraw;
+    const float clear[4] = {sd ? sd->clearR : 0.05f, sd ? sd->clearG : 0.05f,
+                            sd ? sd->clearB : 0.1f, 1.f};
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += SIZE_T(fi) * rtvDescriptorSize_;
     cmdList_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -278,25 +286,31 @@ public:
     cmdList_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     D3D12_VERTEX_BUFFER_VIEW vbv = vbView_;
     cmdList_->IASetVertexBuffers(0, 1, &vbv);
-
-    // rotating quad
-    float ortho[16], rot[16], scl[16], tr[16], tmp[16], world[16], mvp[16];
-    MatOrthoPixels(ortho, float(width_), float(height_));
-    const float cx = width_ * 0.5f, cy = height_ * 0.5f;
-    const float orbit = 120.f + 40.f * std::sin(t * 0.8f);
-    MatRotateZ(rot, t * 2.2f);
-    MatScale(scl, 90.f + 20.f * std::sin(t * 3.f), 90.f + 20.f * std::sin(t * 3.f));
-    MatTranslate(tr, cx + std::cos(t * 1.4f) * orbit, cy + std::sin(t * 1.4f) * orbit * 0.55f);
-    MatMul(tmp, rot, scl);
-    MatMul(world, tr, tmp);
-    MatMul(mvp, ortho, world);
-    const float qr = 0.55f + 0.45f * std::sin(t * 3.5f);
-    const float qg = 0.55f + 0.45f * std::sin(t * 3.5f + 2.1f);
-    const float qb = 0.55f + 0.45f * std::sin(t * 3.5f + 4.2f);
-    SetCB(fi, mvp, qr, qg, qb, 1.f);
     cmdList_->SetPipelineState(pipelineSolid_.Get());
-    cmdList_->SetGraphicsRootConstantBufferView(0, cbGpu_[fi]);
-    cmdList_->DrawInstanced(6, 1, 0, 0);
+
+    float ortho[16];
+    MatOrthoPixels(ortho, float(width_), float(height_));
+    cbSlot_ = 0;
+    EnsureUnitQuad();
+
+    // Draw-list (solid approx for orb/ring/tri — motion-correct parity).
+    if (sd)
+    {
+      for (const auto& p : sd->prims)
+        DrawPrimSolid(fi, ortho, p);
+
+      if (sd->flashA > 0.001f)
+      {
+        DrawSolidXform(fi, ortho, width_ * 0.5f, height_ * 0.5f, 0.f, float(width_), float(height_),
+                       sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.45f);
+      }
+    } else
+    {
+      // Fallback motion if scene missing
+      const float t = static_cast<float>(info.elapsedSec);
+      const float cx = width_ * 0.5f, cy = height_ * 0.5f;
+      DrawSolidXform(fi, ortho, cx, cy, t * 2.2f, 90.f, 90.f, 0.8f, 0.5f, 0.9f, 1.f);
+    }
 
     if (!info.noHud)
     {
@@ -322,6 +336,10 @@ public:
       hud(line);
       sprintf_s(line, "mode   %s", Narrow(WindowModeName(info.mode)).c_str());
       hud(line);
+      sprintf_s(line, "scene  %s", Narrow(info.sceneName ? info.sceneName : L"?").c_str());
+      hud(line);
+      sprintf_s(line, "seed   0x%08X", info.sceneSeed);
+      hud(line);
       sprintf_s(line, "class  %s", Narrow(info.windowClass).c_str());
       hud(line);
       sprintf_s(line, "title  %s", Narrow(info.windowTitle).c_str());
@@ -330,6 +348,10 @@ public:
       hud(line);
       sprintf_s(line, "time   %.2fs", info.elapsedSec);
       hud(line);
+      if (sd && !sd->hud.line1.empty())
+        hud(Narrow(sd->hud.line1).c_str());
+      if (sd && !sd->hud.line2.empty())
+        hud(Narrow(sd->hud.line2).c_str());
     }
 
     bar.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -744,7 +766,9 @@ private:
     for (UINT i = 0; i < kFrameCount; ++i)
     {
       D3D12_RESOURCE_DESC cbd = bd;
-      cbd.Width = (sizeof(CBData) + 255) & ~255;
+      // Root CBV requires 256-byte alignment per slot; many slots for draw-list.
+      constexpr UINT kCbAlign = 256;
+      cbd.Width = static_cast<UINT64>(kCbAlign) * kMaxCbSlots;
       hr = device_->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &cbd,
                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                             IID_PPV_ARGS(&cb_[i]));
@@ -754,20 +778,113 @@ private:
         return false;
       }
       cbGpu_[i] = cb_[i]->GetGPUVirtualAddress();
+      // Persistently map upload CB — write slots each frame without Map/Unmap churn.
+      void* mapped = nullptr;
+      hr = cb_[i]->Map(0, nullptr, &mapped);
+      if (FAILED(hr) || !mapped)
+      {
+        *error = L"Map CB failed";
+        return false;
+      }
+      cbMapped_[i] = static_cast<uint8_t*>(mapped);
     }
     return true;
   }
 
-  void SetCB(UINT fi, const float* mvp, float r, float g, float b, float a)
+  void SetCBSlot(UINT fi, UINT slot, const float* mvp, float r, float g, float b, float a)
   {
-    CBData* p = nullptr;
-    cb_[fi]->Map(0, nullptr, reinterpret_cast<void**>(&p));
+    if (slot >= kMaxCbSlots)
+      return;
+    uint8_t* base = cbMapped_[fi];
+    if (!base)
+      return;
+    constexpr UINT kCbAlign = 256;
+    auto* p = reinterpret_cast<CBData*>(base + slot * kCbAlign);
     memcpy(p->transform, mvp, 16 * sizeof(float));
     p->color[0] = r;
     p->color[1] = g;
     p->color[2] = b;
     p->color[3] = a;
-    cb_[fi]->Unmap(0, nullptr);
+  }
+
+  void DrawSolidXform(UINT fi, const float* ortho, float x, float y, float rot, float sx, float sy,
+                      float r, float g, float b, float a)
+  {
+    if (cbSlot_ >= kMaxCbSlots)
+      return;
+    float R[16], S[16], T[16], tmp[16], world[16], mvp[16];
+    MatRotateZ(R, rot);
+    MatScale(S, sx, sy);
+    MatTranslate(T, x, y);
+    MatMul(tmp, R, S);
+    MatMul(world, T, tmp);
+    MatMul(mvp, ortho, world);
+    const UINT slot = cbSlot_++;
+    SetCBSlot(fi, slot, mvp, r, g, b, a);
+    cmdList_->SetPipelineState(pipelineSolid_.Get());
+    cmdList_->SetGraphicsRootConstantBufferView(0, cbGpu_[fi] + slot * 256);
+    cmdList_->DrawInstanced(6, 1, 0, 0);
+  }
+
+  void DrawPrimSolid(UINT fi, const float* ortho, const scene::Prim& p)
+  {
+    switch (p.kind)
+    {
+    case scene::PrimKind::QuadSolid:
+    case scene::PrimKind::QuadOrb:
+    case scene::PrimKind::QuadRing:
+    case scene::PrimKind::CircleOutline: {
+      float w = p.w, h = p.h;
+      if (p.kind == scene::PrimKind::CircleOutline)
+      {
+        w = p.w * 2.f;
+        h = p.w * 2.f;
+      }
+      // Slightly shrink orbs so solid squares read as “points”
+      if (p.kind == scene::PrimKind::QuadOrb)
+      {
+        w *= 0.85f;
+        h *= 0.85f;
+      }
+      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, w, h, p.r, p.g, p.b, p.a);
+      break;
+    }
+    case scene::PrimKind::Line: {
+      const float dx = p.x2 - p.x;
+      const float dy = p.y2 - p.y;
+      const float len = std::sqrt(dx * dx + dy * dy);
+      if (len < 0.5f)
+        break;
+      const float ang = std::atan2(dy, dx);
+      const float thick = p.w > 0.5f ? p.w : 2.f;
+      DrawSolidXform(fi, ortho, (p.x + p.x2) * 0.5f, (p.y + p.y2) * 0.5f, ang, len, thick, p.r, p.g,
+                     p.b, p.a);
+      break;
+    }
+    case scene::PrimKind::Triangle:
+      // Approx triangle as rotated diamond/rect (good enough for freeze-tell on d3d12).
+      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, p.h, p.w * 0.65f, p.r, p.g, p.b, p.a);
+      break;
+    }
+  }
+
+  void EnsureUnitQuad()
+  {
+    Vertex unit[6] = {{-0.5f, -0.5f, 0, 0}, {0.5f, -0.5f, 1, 0}, {0.5f, 0.5f, 1, 1},
+                      {-0.5f, -0.5f, 0, 0}, {0.5f, 0.5f, 1, 1},  {-0.5f, 0.5f, 0, 1}};
+    void* p = nullptr;
+    vb_->Map(0, nullptr, &p);
+    memcpy(p, unit, sizeof(unit));
+    vb_->Unmap(0, nullptr);
+  }
+
+  void SetCB(UINT fi, const float* mvp, float r, float g, float b, float a)
+  {
+    // Legacy single-slot helper used by text (slot 0 reserved after prims if needed).
+    if (cbSlot_ >= kMaxCbSlots)
+      cbSlot_ = kMaxCbSlots - 1;
+    const UINT slot = cbSlot_;
+    SetCBSlot(fi, slot, mvp, r, g, b, a);
   }
 
   void DrawTextLine(UINT fi, const char* text, float x, float y, float scale, float r, float g,
@@ -808,21 +925,13 @@ private:
     }
     vb_->Unmap(0, nullptr);
 
-    float id[16];
-    MatIdentity(id);
-    // positions already in pixels — use ortho only
-    float mvp[16];
-    MatMul(mvp, ortho, id);
-    // Actually verts are in pixel space already with identity world; ortho maps pixels->ndc.
-    // Our MatOrtho expects world then ortho*world. verts are pixel coords so world=I works if
-    // vertex shader does mul(float4(pos,0,1), mvp) with ortho.
-    SetCB(fi, ortho, r, g, b, a);
-    // Wait - unit quad uses -0.5..0.5 with world transform. Text verts are absolute pixels.
-    // ortho alone: x' = x*2/w - 1. Good for pixel coords.
-    cmdList_->SetGraphicsRootConstantBufferView(0, cbGpu_[fi]);
+    if (cbSlot_ >= kMaxCbSlots)
+      return;
+    const UINT slot = cbSlot_++;
+    SetCBSlot(fi, slot, ortho, r, g, b, a);
+    cmdList_->SetGraphicsRootConstantBufferView(0, cbGpu_[fi] + slot * 256);
     cmdList_->DrawInstanced(6 * count, 1, giBase, 0);
 
-    // restore solid pipeline for subsequent solid draws is caller's job; we leave text.
     cmdList_->SetPipelineState(pipelineSolid_.Get());
   }
 
@@ -856,12 +965,14 @@ private:
   int width_ = 0, height_ = 0, atlasW_ = 0, atlasH_ = 0;
   WindowMode mode_ = WindowMode::Windowed;
   UINT frameIndex_ = 0;
+  UINT cbSlot_ = 0;
   UINT rtvDescriptorSize_ = 0;
   UINT64 fenceValue_ = 0;
   UINT64 fenceValues_[kFrameCount]{};
   HANDLE fenceEvent_ = nullptr;
   D3D12_VERTEX_BUFFER_VIEW vbView_{};
   D3D12_GPU_VIRTUAL_ADDRESS cbGpu_[kFrameCount]{};
+  uint8_t* cbMapped_[kFrameCount]{};
 
   ComPtr<IDXGIFactory4> factory_;
   ComPtr<ID3D12Device> device_;

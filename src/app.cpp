@@ -82,6 +82,7 @@ bool App::Initialize(std::wstring* error)
     return false;
   if (!CreateRenderer(error))
     return false;
+  InitScene();
 
   // Capture block AFTER renderer is fully up (signature-policy needs driver UMDs loaded).
   if (cfg_.blockCapture != BlockCaptureMode::None)
@@ -210,6 +211,20 @@ bool App::CreateRenderer(std::wstring* error)
       Log("note: --flip-model ignored for api=%s", Narrow(GraphicsApiName(cfg_.api)).c_str());
   }
   return true;
+}
+
+void App::InitScene()
+{
+  scene_ = scene::CreateScene(cfg_.scene);
+  scene::SceneConfig sc;
+  sc.id = cfg_.scene;
+  sc.seed = cfg_.sceneSeed;
+  sc.intensity = 1.f;
+  int cw = cfg_.width, ch = cfg_.height;
+  if (hwnd_)
+    ClientSize(&cw, &ch);
+  scene_->Reset(sc, cw, ch);
+  Log("scene: %s seed=0x%08X", Narrow(scene_->Name()).c_str(), cfg_.sceneSeed);
 }
 
 bool App::ApplyBlockNow(std::wstring* error)
@@ -448,8 +463,14 @@ void App::Frame()
   }
 
   qpcLast_ = now;
+  const double prevElapsed = elapsedSec_;
   elapsedSec_ = static_cast<double>(now.QuadPart - qpcStart_.QuadPart) /
                 static_cast<double>(qpcFreq_.QuadPart);
+  lastDt_ = static_cast<float>(elapsedSec_ - prevElapsed);
+  if (lastDt_ < 0.f)
+    lastDt_ = 0.f;
+  if (lastDt_ > 0.1f)
+    lastDt_ = 0.1f;
 
   if (cfg_.exitAfterSeconds > 0 && elapsedSec_ >= cfg_.exitAfterSeconds)
   {
@@ -466,6 +487,49 @@ void App::Frame()
   int cw = 0, ch = 0;
   ClientSize(&cw, &ch);
 
+  if (scene_)
+  {
+    if (cw > 0 && ch > 0)
+      scene_->Resize(cw, ch);
+    scene_->Update(elapsedSec_, lastDt_, cw > 0 ? cw : cfg_.width, ch > 0 ? ch : cfg_.height);
+    // Keep prims capacity; only reset draw-list payload fields.
+    // Default backdrop is Solid — never Aurora (avoids nebula PS if Emit forgets to set it).
+    sceneDraw_.backdrop = scene::BackdropId::Solid;
+    sceneDraw_.clearR = 0.01f;
+    sceneDraw_.clearG = 0.01f;
+    sceneDraw_.clearB = 0.03f;
+    sceneDraw_.flashR = 1.f;
+    sceneDraw_.flashG = 0.55f;
+    sceneDraw_.flashB = 0.2f;
+    sceneDraw_.flashA = 0.f;
+    sceneDraw_.hud = {};
+    sceneDraw_.prims.clear();
+    scene_->Emit(sceneDraw_);
+
+    // Emit-path diagnostics (not just CLI selection).
+    const bool logNow =
+        (frameIndex_ == 0) || (frameIndex_ == 1) || (frameIndex_ % 120 == 0); // ~2s at 60fps
+    if (logNow)
+    {
+      const scene::PrimCounts pc = scene::CountPrims(sceneDraw_.prims);
+      Log("scene-emit: name=%s id=%d backdrop=%s(%d) clear=%.3f,%.3f,%.3f flashA=%.2f "
+          "prims=%d [solid=%d orb=%d ring=%d line=%d tri=%d circle=%d] hud1=\"%s\"",
+          Narrow(scene_->Name()).c_str(), static_cast<int>(scene_->Id()),
+          Narrow(scene::BackdropIdName(sceneDraw_.backdrop)).c_str(),
+          static_cast<int>(sceneDraw_.backdrop), sceneDraw_.clearR, sceneDraw_.clearG,
+          sceneDraw_.clearB, sceneDraw_.flashA, pc.total, pc.solid, pc.orb, pc.ring, pc.line,
+          pc.tri, pc.circle, Narrow(sceneDraw_.hud.line1).c_str());
+      if (!sceneDraw_.prims.empty())
+      {
+        const auto& p0 = sceneDraw_.prims.front();
+        const auto& pN = sceneDraw_.prims.back();
+        Log("scene-emit: first kind=%s xy=%.1f,%.1f wh=%.1f,%.1f  last kind=%s xy=%.1f,%.1f",
+            Narrow(scene::PrimKindName(p0.kind)).c_str(), p0.x, p0.y, p0.w, p0.h,
+            Narrow(scene::PrimKindName(pN.kind)).c_str(), pN.x, pN.y);
+      }
+    }
+  }
+
   FrameInfo fi{};
   fi.frameIndex = frameIndex_;
   fi.elapsedSec = elapsedSec_;
@@ -479,6 +543,10 @@ void App::Frame()
   fi.flipModel = cfg_.flipModel;
   fi.buffers = cfg_.buffers;
   fi.noHud = cfg_.noHud;
+  fi.sceneName = scene_ ? scene_->Name() : scene::SceneIdName(cfg_.scene);
+  fi.sceneSeed = cfg_.sceneSeed;
+  fi.sceneDraw = scene_ ? &sceneDraw_ : nullptr;
+  fi.dumpFramePath = cfg_.dumpFramePath.empty() ? nullptr : cfg_.dumpFramePath.c_str();
 
   if (renderer_)
     renderer_->Render(fi);

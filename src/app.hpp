@@ -2,6 +2,7 @@
 
 #include "config.hpp"
 #include "renderer.hpp"
+#include "scene/scene.hpp"
 
 #include <memory>
 #include <string>
@@ -29,6 +30,7 @@ private:
   bool RegisterWindowClass(std::wstring* error);
   bool CreateMainWindow(std::wstring* error);
   bool CreateRenderer(std::wstring* error);
+  void InitScene();
 
   void ApplyWindowMode(WindowMode mode, bool initial);
   void GetMonitorRect(RECT* out) const;
@@ -53,6 +55,8 @@ private:
   HWND hwnd_ = nullptr;
   ATOM atom_ = 0;
   std::unique_ptr<IRenderer> renderer_;
+  std::unique_ptr<scene::IScene> scene_;
+  scene::SceneDraw sceneDraw_;
 
   bool running_ = true;
   bool churn_ = false;
@@ -68,6 +72,7 @@ private:
 
   uint64_t frameIndex_ = 0;
   double elapsedSec_ = 0.0;
+  float lastDt_ = 1.f / 60.f;
   LARGE_INTEGER qpcFreq_{};
   LARGE_INTEGER qpcStart_{};
   LARGE_INTEGER qpcLast_{};

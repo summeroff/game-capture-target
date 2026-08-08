@@ -44,7 +44,9 @@ struct VSOut {
 VSOut VSMain(VSIn i)
 {
     VSOut o;
-    o.pos = mul(float4(i.pos, 0.0f, 1.0f), uTransform);
+    // Column-vector convention: CPU builds M for p' = M * p (column-major).
+    // Must be mul(M, v) — mul(v, M) drops translation and pins every prim at screen center.
+    o.pos = mul(uTransform, float4(i.pos, 0.0f, 1.0f));
     o.uv  = i.uv;
     o.col = uColor;
     return o;
@@ -270,6 +272,7 @@ public:
     psRing_.Reset();
     blend_.Reset();
     blendAdd_.Reset();
+    raster_.Reset();
     ctx_.Reset();
     device_.Reset();
   }
@@ -370,8 +373,12 @@ public:
     timeSec_ = t;
 
     ctx_->OMSetRenderTargets(1, rtv_.GetAddressOf(), nullptr);
-    // Background shader paints everything; clear is a safety net.
-    const float clear[4] = {0.01f, 0.01f, 0.03f, 1.f};
+
+    const scene::SceneDraw* sd = info.sceneDraw;
+    const float clearR = sd ? sd->clearR : 0.01f;
+    const float clearG = sd ? sd->clearG : 0.01f;
+    const float clearB = sd ? sd->clearB : 0.03f;
+    const float clear[4] = {clearR, clearG, clearB, 1.f};
     ctx_->ClearRenderTargetView(rtv_.Get(), clear);
 
     D3D11_VIEWPORT vp{};
@@ -388,160 +395,140 @@ public:
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
     ctx_->VSSetShader(vs_.Get(), nullptr, 0);
     ctx_->PSSetSamplers(0, 1, samp_.GetAddressOf());
+    if (raster_)
+      ctx_->RSSetState(raster_.Get());
 
     float ortho[16];
     MatOrthoPixels(ortho, static_cast<float>(width_), static_cast<float>(height_));
+    const float blendFactor[4] = {0, 0, 0, 0};
 
-    // --- Fullscreen procedural backdrop ---
+    // Backdrop — only Aurora uses the procedural nebula PS.
+    const scene::BackdropId bd = sd ? sd->backdrop : scene::BackdropId::Solid;
+    bool drewAuroraPs = false;
+    if (bd == scene::BackdropId::Aurora)
     {
       float scl[16], tr[16], world[16], mvp[16];
       MatScale(scl, static_cast<float>(width_), static_cast<float>(height_));
       MatTranslate(tr, width_ * 0.5f, height_ * 0.5f);
       MatMul(world, tr, scl);
       MatMul(mvp, ortho, world);
-      const float blendFactor[4] = {0, 0, 0, 0};
       ctx_->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
       ctx_->PSSetShader(psBg_.Get(), nullptr, 0);
       UpdateCB(mvp, 1, 1, 1, 1);
       ctx_->Draw(6, 0);
+      drewAuroraPs = true;
     }
 
-    const float cx = width_ * 0.5f;
-    const float cy = height_ * 0.55f;
-    const float blendFactor[4] = {0, 0, 0, 0};
-    ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
-
-    // --- Outer spinning ring of orbs ---
-    ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
-    constexpr int kOrbs = 14;
-    for (int i = 0; i < kOrbs; ++i)
+    // Scene primitives
+    int drew = 0;
+    if (sd)
     {
-      const float a0 = t * 0.7f + i * (6.2831853f / kOrbs);
-      const float radius = 180.f + 40.f * std::sin(t * 1.1f + i * 0.4f);
-      const float ox = cx + std::cos(a0) * radius;
-      const float oy = cy + std::sin(a0) * radius * 0.62f;
-      const float sz = 28.f + 10.f * std::sin(t * 3.0f + i);
-      const float hue = std::fmod(t * 0.08f + i / float(kOrbs), 1.f);
-      float rr, gg, bb;
-      Hsv(hue, 0.85f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, ox, oy, 0.f, sz, sz, rr, gg, bb, 0.9f);
-    }
-
-    // --- Counter-rotating inner ring ---
-    for (int i = 0; i < 8; ++i)
-    {
-      const float a0 = -t * 1.3f + i * (6.2831853f / 8);
-      const float radius = 90.f + 18.f * std::cos(t * 2.0f + i);
-      const float ox = cx + std::cos(a0) * radius;
-      const float oy = cy + std::sin(a0) * radius * 0.7f;
-      float rr, gg, bb;
-      Hsv(std::fmod(0.45f + i * 0.08f + t * 0.05f, 1.f), 0.7f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, ox, oy, 0.f, 18.f, 18.f, rr, gg, bb, 0.85f);
-    }
-
-    // --- Big soft rings ---
-    ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
-    for (int i = 0; i < 3; ++i)
-    {
-      const float pulse = 1.f + 0.12f * std::sin(t * 2.5f + i);
-      const float sz = (220.f + i * 90.f) * pulse;
-      float rr, gg, bb;
-      Hsv(std::fmod(0.55f + i * 0.12f + t * 0.03f, 1.f), 0.8f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, cx, cy, t * (0.4f + i * 0.2f), sz, sz * 0.7f, rr, gg, bb, 0.35f);
-    }
-
-    // --- Comet: bright orb + trailing ghosts ---
-    ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
-    {
-      const float ca = t * 1.15f;
-      const float cr = 250.f + 60.f * std::sin(t * 0.6f);
-      const float cox = cx + std::cos(ca) * cr;
-      const float coy = cy + std::sin(ca) * cr * 0.5f;
-      for (int trail = 7; trail >= 0; --trail)
+      for (const auto& p : sd->prims)
       {
-        const float ta = ca - trail * 0.08f;
-        const float trr = cr - trail * 6.f;
-        const float tx = cx + std::cos(ta) * trr;
-        const float ty = cy + std::sin(ta) * trr * 0.5f;
-        const float sz = 42.f - trail * 4.f;
-        const float al = 0.95f - trail * 0.1f;
-        float rr, gg, bb;
-        Hsv(std::fmod(0.08f + trail * 0.02f + t * 0.1f, 1.f), 0.9f, 1.f, &rr, &gg, &bb);
-        DrawTransformed(ortho, tx, ty, 0.f, sz, sz, rr, gg, bb, al);
+        DrawPrim(ortho, p);
+        ++drew;
       }
-      DrawTransformed(ortho, cox, coy, 0.f, 56.f, 56.f, 1.f, 0.95f, 0.8f, 1.f);
+
+      // Fullscreen flash (additive)
+      if (sd->flashA > 0.001f)
+      {
+        ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+        ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+        DrawTransformed(ortho, width_ * 0.5f, height_ * 0.5f, 0.f, float(width_), float(height_),
+                        sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.65f);
+      }
     }
 
-    // --- Audio-style bars along the bottom (purely visual) ---
-    ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
-    ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
-    constexpr int kBars = 48;
-    const float barW = width_ / float(kBars);
-    for (int i = 0; i < kBars; ++i)
+    // Ground-truth: what this backend actually submitted (not CLI selection).
+    if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
     {
-      const float n = 0.5f + 0.5f * std::sin(t * 4.0f + i * 0.45f) * std::cos(t * 2.3f + i * 0.17f);
-      const float h = (30.f + n * (height_ * 0.22f));
-      const float bx = (i + 0.5f) * barW;
-      const float by = height_ - h * 0.5f - 8.f;
-      float rr, gg, bb;
-      Hsv(std::fmod(i / float(kBars) + t * 0.15f, 1.f), 0.85f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, bx, by, 0.f, barW * 0.72f, h, rr, gg, bb, 0.75f);
+      scene::PrimCounts pc{};
+      if (sd)
+        pc = scene::CountPrims(sd->prims);
+      Log("d3d11-draw: scene=%s backdrop=%s auroraPS=%d clear=%.3f,%.3f,%.3f "
+          "submitted_prims=%d/%d [solid=%d orb=%d ring=%d line=%d tri=%d circle=%d] flashA=%.2f",
+          Narrow(info.sceneName ? info.sceneName : L"?").c_str(),
+          Narrow(scene::BackdropIdName(bd)).c_str(), drewAuroraPs ? 1 : 0, clearR, clearG, clearB,
+          drew, pc.total, pc.solid, pc.orb, pc.ring, pc.line, pc.tri, pc.circle,
+          sd ? sd->flashA : 0.f);
     }
 
-    // --- Spinning diamond core ---
-    {
-      const float ang = t * 1.8f;
-      const float sz = 70.f + 15.f * std::sin(t * 4.0f);
-      float rr, gg, bb;
-      Hsv(std::fmod(t * 0.2f, 1.f), 0.6f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, cx, cy, ang, sz, sz, rr, gg, bb, 0.9f);
-      DrawTransformed(ortho, cx, cy, ang + 0.785f, sz * 0.55f, sz * 0.55f, 1.f, 1.f, 1.f, 0.7f);
-    }
-
-    // Large frame counter — still the capture-liveness tell.
+    // HUD — compact top-left plate (never a giant center block).
     if (!info.noHud)
     {
-      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      const float blendFactorHud[4] = {0, 0, 0, 0};
+      ctx_->OMSetBlendState(blend_.Get(), blendFactorHud, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+
       char big[32];
       sprintf_s(big, "%llu", static_cast<unsigned long long>(info.frameIndex));
-      const float scale = 7.f;
+      const float scale = 6.f;
       const float tw = static_cast<float>(std::strlen(big)) * font8x8::kGlyphW * scale;
-      // Soft shadow then bright glyph
-      DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.12f + 3.f, scale, 0.f, 0.f, 0.f,
-                 0.55f);
-      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.12f, scale, 1.f, 0.95f, 0.35f, 1.f);
 
       char line[256];
       std::vector<std::string> lines;
-      sprintf_s(line, "frame  %llu", static_cast<unsigned long long>(info.frameIndex));
+      // Keep on-screen HUD short; verbose prim tallies stay in logs.
+      sprintf_s(line, "frame %llu  %dx%d  %s", static_cast<unsigned long long>(info.frameIndex),
+                info.clientW, info.clientH, Narrow(ApiName()).c_str());
       lines.emplace_back(line);
-      sprintf_s(line, "size   %dx%d", info.clientW, info.clientH);
+      sprintf_s(line, "scene %s  seed 0x%08X",
+                Narrow(info.sceneName ? info.sceneName : L"?").c_str(), info.sceneSeed);
       lines.emplace_back(line);
-      sprintf_s(line, "api    %s", Narrow(ApiName()).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "swap   %s", Narrow(SwapEffectName()).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "present %s", Narrow(PresentModeName()).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "mode   %s", Narrow(WindowModeName(info.mode)).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "class  %s", Narrow(info.windowClass).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "title  %s", Narrow(info.windowTitle).c_str());
-      lines.emplace_back(line);
-      sprintf_s(line, "pid    %lu", static_cast<unsigned long>(info.pid));
-      lines.emplace_back(line);
-      sprintf_s(line, "time   %.2fs", info.elapsedSec);
-      lines.emplace_back(line);
-      sprintf_s(line, "hotkeys F1-F7 / Esc");
+      {
+        scene::PrimCounts pc{};
+        if (sd)
+          pc = scene::CountPrims(sd->prims);
+        sprintf_s(line, "draw bg=%s auroraPS=%d n=%d", Narrow(scene::BackdropIdName(bd)).c_str(),
+                  drewAuroraPs ? 1 : 0, drew);
+        lines.emplace_back(line);
+        sprintf_s(line, "prims s%d o%d r%d l%d t%d", pc.solid, pc.orb, pc.ring, pc.line, pc.tri);
+        lines.emplace_back(line);
+      }
+      if (sd && !sd->hud.line1.empty())
+        lines.emplace_back(Narrow(sd->hud.line1));
+      if (sd && !sd->hud.line2.empty())
+        lines.emplace_back(Narrow(sd->hud.line2));
+      sprintf_s(line, "F1-F7 Esc  t=%.1fs", info.elapsedSec);
       lines.emplace_back(line);
 
-      float y = 8.f;
+      const float textScale = 2.f;
+      const float lineH = font8x8::kGlyphH * textScale + 3.f;
+      const float plateH = 10.f + lineH * float(lines.size()) + 6.f;
+      const float plateW = 380.f;
+      // Pixel-space rect for plate (axis-aligned, top-left).
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      DrawPixelRect(ortho, 4.f, 4.f, 4.f + plateW, 4.f + plateH, 0.f, 0.f, 0.f, 0.62f);
+
+      DrawTextPx(big, (width_ - tw) * 0.5f + 2.f, height_ * 0.06f + 2.f, scale, 0.f, 0.f, 0.f,
+                 0.55f);
+      DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.06f, scale, 1.f, 0.95f, 0.35f, 1.f);
+
+      float y = 10.f;
       for (const auto& s : lines)
       {
-        DrawTextPx(s.c_str(), 9.f, y + 1.f, 2.f, 0.f, 0.f, 0.f, 0.65f);
-        DrawTextPx(s.c_str(), 8.f, y, 2.f, 0.92f, 0.95f, 1.f, 1.f);
-        y += font8x8::kGlyphH * 2.f + 4.f;
+        DrawTextPx(s.c_str(), 13.f, y + 1.f, textScale, 0.f, 0.f, 0.f, 0.9f);
+        DrawTextPx(s.c_str(), 12.f, y, textScale, 0.95f, 0.98f, 1.f, 1.f);
+        y += lineH;
+      }
+
+      if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
+      {
+        Log("d3d11-hud: lines=%d plate=%.0fx%.0f bigFrame=%s", static_cast<int>(lines.size()),
+            plateW, plateH, big);
+      }
+    }
+
+    // Optional framebuffer dump for visual QA (before Present).
+    if (info.dumpFramePath && !dumpedFrame_ && info.frameIndex >= 3)
+    {
+      if (DumpBackbufferBmp(info.dumpFramePath))
+      {
+        dumpedFrame_ = true;
+        Log("d3d11: dumped framebuffer to %s (%dx%d)", Narrow(info.dumpFramePath).c_str(), width_,
+            height_);
+      } else
+      {
+        Log("d3d11: dump-frame FAILED path=%s", Narrow(info.dumpFramePath).c_str());
       }
     }
 
@@ -928,6 +915,18 @@ private:
       return false;
     }
 
+    // 2D UI/scene: never cull (triangles may be CW or CCW depending on aim angle).
+    D3D11_RASTERIZER_DESC rd{};
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.DepthClipEnable = TRUE;
+    hr = device_->CreateRasterizerState(&rd, &raster_);
+    if (FAILED(hr))
+    {
+      *error = L"CreateRasterizerState failed";
+      return false;
+    }
+
     return true;
   }
 
@@ -988,8 +987,12 @@ private:
   void UpdateCB(const float* mvp, float r, float g, float b, float a)
   {
     D3D11_MAPPED_SUBRESOURCE map{};
-    if (FAILED(ctx_->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+    const HRESULT hr = ctx_->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
+    if (FAILED(hr))
+    {
+      Log("d3d11: Map CB FAILED hr=0x%08X", static_cast<unsigned>(hr));
       return;
+    }
     auto* cb = static_cast<CBData*>(map.pData);
     std::memcpy(cb->transform, mvp, 16 * sizeof(float));
     cb->color[0] = r;
@@ -1007,13 +1010,145 @@ private:
 
   void DrawUnitQuad(const float* mvp, float r, float g, float b, float a)
   {
+    // Re-assert full IA state every draw — HUD path was producing center-screen
+    // triangles (identity NDC) when VB/topology got left wrong after dyn draws.
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx_->IASetInputLayout(layout_.Get());
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
+    ctx_->VSSetShader(vs_.Get(), nullptr, 0);
     UpdateCB(mvp, r, g, b, a);
     ctx_->Draw(6, 0);
+  }
+
+  void DrawPrim(const float* ortho, const scene::Prim& p)
+  {
+    const float blendFactor[4] = {0, 0, 0, 0};
+    switch (p.kind)
+    {
+    case scene::PrimKind::QuadOrb:
+      ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, p.rot, p.w, p.h, p.r, p.g, p.b, p.a);
+      break;
+    case scene::PrimKind::QuadRing:
+      ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, p.rot, p.w, p.h, p.r, p.g, p.b, p.a);
+      break;
+    case scene::PrimKind::QuadSolid:
+      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, p.rot, p.w, p.h, p.r, p.g, p.b, p.a);
+      break;
+    case scene::PrimKind::Line: {
+      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      const float dx = p.x2 - p.x;
+      const float dy = p.y2 - p.y;
+      const float len = std::sqrt(dx * dx + dy * dy);
+      if (len < 0.5f)
+        break;
+      const float ang = std::atan2(dy, dx);
+      const float mx = (p.x + p.x2) * 0.5f;
+      const float my = (p.y + p.y2) * 0.5f;
+      const float thick = p.w > 0.5f ? p.w : 2.f;
+      DrawTransformed(ortho, mx, my, ang, len, thick, p.r, p.g, p.b, p.a);
+      break;
+    }
+    case scene::PrimKind::Triangle: {
+      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      DrawTriangle(ortho, p);
+      break;
+    }
+    case scene::PrimKind::CircleOutline:
+      ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, 0.f, p.w * 2.f, p.w * 2.f, p.r, p.g, p.b, p.a);
+      break;
+    }
+  }
+
+  void DrawTriangle(const float* ortho, const scene::Prim& p)
+  {
+    // Isosceles: tip along +rot (screen +X when rot=0).
+    EnsureDynVb();
+    const float cs = std::cos(p.rot);
+    const float sn = std::sin(p.rot);
+    const float halfB = p.w * 0.5f;
+    const float halfH = p.h * 0.5f;
+    const float lx[3] = {halfH, -halfH, -halfH};
+    const float ly[3] = {0.f, -halfB, halfB};
+    Vertex verts[6];
+    auto put = [&](int i, float lx_, float ly_) {
+      const float wx = p.x + lx_ * cs - ly_ * sn;
+      const float wy = p.y + lx_ * sn + ly_ * cs;
+      verts[i] = {wx, wy, 0.f, 0.f};
+    };
+    put(0, lx[0], ly[0]);
+    put(1, lx[1], ly[1]);
+    put(2, lx[2], ly[2]);
+    // Duplicate as second tri so Draw(6) works if a caller expects quads.
+    verts[3] = verts[0];
+    verts[4] = verts[2];
+    verts[5] = verts[1];
+
+    D3D11_MAPPED_SUBRESOURCE map{};
+    if (FAILED(ctx_->Map(dynVb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+      return;
+    std::memcpy(map.pData, verts, sizeof(verts));
+    ctx_->Unmap(dynVb_.Get(), 0);
+
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetVertexBuffers(0, 1, dynVb_.GetAddressOf(), &stride, &offset);
+
+    float mvp[16];
+    std::memcpy(mvp, ortho, sizeof(float) * 16);
+    UpdateCB(mvp, p.r, p.g, p.b, p.a);
+    ctx_->Draw(3, 0);
+
+    // Restore unit VB for subsequent solid/orb/ring draws.
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
+  }
+
+  void DrawPixelRect(const float* ortho, float x0, float y0, float x1, float y1, float r, float g,
+                     float b, float a)
+  {
+    // Axis-aligned rect in pixel space (top-left origin). Avoids unit-quad path issues.
+    EnsureDynVb();
+    Vertex verts[6] = {
+        {x0, y0, 0.f, 0.f}, {x1, y0, 1.f, 0.f}, {x1, y1, 1.f, 1.f},
+        {x0, y0, 0.f, 0.f}, {x1, y1, 1.f, 1.f}, {x0, y1, 0.f, 1.f},
+    };
+    D3D11_MAPPED_SUBRESOURCE map{};
+    if (FAILED(ctx_->Map(dynVb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+      return;
+    std::memcpy(map.pData, verts, sizeof(verts));
+    ctx_->Unmap(dynVb_.Get(), 0);
+
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetVertexBuffers(0, 1, dynVb_.GetAddressOf(), &stride, &offset);
+
+    float mvp[16];
+    std::memcpy(mvp, ortho, 16 * sizeof(float));
+    UpdateCB(mvp, r, g, b, a);
+    ctx_->Draw(6, 0);
+
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
   }
 
   void DrawTransformed(const float* ortho, float x, float y, float rot, float sx, float sy, float r,
                        float g, float b, float a)
   {
+    // Always bind the unit quad VB — triangle/text path may have left dynVb bound.
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
+
     float R[16], S[16], T[16], tmp[16], world[16], mvp[16];
     MatRotateZ(R, rot);
     MatScale(S, sx, sy);
@@ -1143,6 +1278,115 @@ private:
     device_->CreateBuffer(&bd, nullptr, &dynVb_);
   }
 
+  bool DumpBackbufferBmp(const wchar_t* path)
+  {
+    if (!device_ || !ctx_ || !backbuffer_ || !path || !*path)
+      return false;
+
+    D3D11_TEXTURE2D_DESC desc{};
+    backbuffer_->GetDesc(&desc);
+
+    D3D11_TEXTURE2D_DESC staging = desc;
+    staging.Usage = D3D11_USAGE_STAGING;
+    staging.BindFlags = 0;
+    staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    staging.MiscFlags = 0;
+    staging.MipLevels = 1;
+    staging.ArraySize = 1;
+    staging.SampleDesc.Count = 1;
+    staging.SampleDesc.Quality = 0;
+
+    ComPtr<ID3D11Texture2D> tex;
+    if (FAILED(device_->CreateTexture2D(&staging, nullptr, &tex)))
+      return false;
+
+    // Resolve MSAA if ever enabled; currently 1x so CopyResource is fine.
+    ctx_->CopyResource(tex.Get(), backbuffer_.Get());
+
+    D3D11_MAPPED_SUBRESOURCE map{};
+    if (FAILED(ctx_->Map(tex.Get(), 0, D3D11_MAP_READ, 0, &map)))
+      return false;
+
+    const int w = static_cast<int>(desc.Width);
+    const int h = static_cast<int>(desc.Height);
+    // BMP row pitch must be multiple of 4; 24bpp.
+    const int rowBytes = w * 3;
+    const int pad = (4 - (rowBytes % 4)) & 3;
+    const int stride = rowBytes + pad;
+    const int imgSize = stride * h;
+
+#pragma pack(push, 1)
+    struct BmpFileHeader
+    {
+      uint16_t bfType;
+      uint32_t bfSize;
+      uint16_t bfReserved1;
+      uint16_t bfReserved2;
+      uint32_t bfOffBits;
+    };
+    struct BmpInfoHeader
+    {
+      uint32_t biSize;
+      int32_t biWidth;
+      int32_t biHeight;
+      uint16_t biPlanes;
+      uint16_t biBitCount;
+      uint32_t biCompression;
+      uint32_t biSizeImage;
+      int32_t biXPelsPerMeter;
+      int32_t biYPelsPerMeter;
+      uint32_t biClrUsed;
+      uint32_t biClrImportant;
+    };
+#pragma pack(pop)
+
+    BmpFileHeader fh{};
+    fh.bfType = 0x4D42;
+    fh.bfOffBits = sizeof(BmpFileHeader) + sizeof(BmpInfoHeader);
+    fh.bfSize = fh.bfOffBits + static_cast<uint32_t>(imgSize);
+
+    BmpInfoHeader ih{};
+    ih.biSize = sizeof(BmpInfoHeader);
+    ih.biWidth = w;
+    ih.biHeight = h; // bottom-up
+    ih.biPlanes = 1;
+    ih.biBitCount = 24;
+    ih.biCompression = 0;
+    ih.biSizeImage = static_cast<uint32_t>(imgSize);
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path, L"wb") != 0 || !f)
+    {
+      ctx_->Unmap(tex.Get(), 0);
+      return false;
+    }
+
+    fwrite(&fh, 1, sizeof(fh), f);
+    fwrite(&ih, 1, sizeof(ih), f);
+
+    std::vector<uint8_t> row(static_cast<size_t>(stride), 0);
+    // Source is top-down DXGI; BMP wants bottom-up.
+    for (int y = h - 1; y >= 0; --y)
+    {
+      const auto* src = static_cast<const uint8_t*>(map.pData) + y * map.RowPitch;
+      for (int x = 0; x < w; ++x)
+      {
+        // R8G8B8A8_UNORM
+        const uint8_t r = src[x * 4 + 0];
+        const uint8_t g = src[x * 4 + 1];
+        const uint8_t b = src[x * 4 + 2];
+        row[static_cast<size_t>(x * 3 + 0)] = b;
+        row[static_cast<size_t>(x * 3 + 1)] = g;
+        row[static_cast<size_t>(x * 3 + 2)] = r;
+      }
+      fwrite(row.data(), 1, static_cast<size_t>(stride), f);
+    }
+
+    fclose(f);
+    ctx_->Unmap(tex.Get(), 0);
+    return true;
+  }
+
   HWND hwnd_ = nullptr;
   Config cfg_{};
   int width_ = 0;
@@ -1152,6 +1396,7 @@ private:
   int atlasW_ = 0;
   int atlasH_ = 0;
   float timeSec_ = 0.f;
+  bool dumpedFrame_ = false;
 
   ComPtr<ID3D11Device> device_;
   ComPtr<ID3D11DeviceContext> ctx_;
@@ -1172,6 +1417,7 @@ private:
   ComPtr<ID3D11SamplerState> samp_;
   ComPtr<ID3D11BlendState> blend_;
   ComPtr<ID3D11BlendState> blendAdd_;
+  ComPtr<ID3D11RasterizerState> raster_;
   ComPtr<ID3D11Texture2D> fontTex_;
   ComPtr<ID3D11ShaderResourceView> fontSrv_;
 };

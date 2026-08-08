@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "scene/scene.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -22,6 +23,12 @@ struct FrameInfo
   bool flipModel = true;
   int buffers = 2;
   bool noHud = false;
+
+  // Scene draw-list (owned by App for the frame; pointer may be null).
+  const wchar_t* sceneName = L"aurora";
+  uint32_t sceneSeed = 0;
+  const scene::SceneDraw* sceneDraw = nullptr;
+  const wchar_t* dumpFramePath = nullptr; // non-null → request one BMP dump
 };
 
 // Graphics backend behind a thin interface so d3d12/opengl can be added later.
