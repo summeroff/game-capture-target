@@ -143,12 +143,13 @@ public:
   void Emit(SceneDraw& out) override
   {
     out.backdrop = BackdropId::Starfield;
-    out.clearR = 0.01f;
-    out.clearG = 0.012f;
-    out.clearB = 0.04f;
+    // Near-black void — not aurora purple nebula.
+    out.clearR = 0.004f;
+    out.clearG = 0.006f;
+    out.clearB = 0.012f;
     out.flashR = 1.f;
-    out.flashG = 0.55f;
-    out.flashB = 0.15f;
+    out.flashG = 0.45f;
+    out.flashB = 0.1f;
     out.flashA = Clamp(flash_, 0.f, 1.f);
     out.prims.clear();
     out.prims.reserve(256);
@@ -156,93 +157,130 @@ public:
     const float cx = w_ * 0.5f;
     const float cy = h_ * 0.5f;
 
-    // Stars
+    // Hard star dots (solid, not soft aurora orbs)
     for (const auto& s : stars_)
     {
-      const float tw = 0.45f + 0.55f * (0.5f + 0.5f * std::sin(t_ * s.speed + s.phase));
+      const float tw = 0.55f + 0.45f * (0.5f + 0.5f * std::sin(t_ * s.speed + s.phase));
       const float a = s.bright * tw;
-      out.prims.push_back(MakeOrb(s.x * w_, s.y * h_, s.size, 0.85f, 0.9f, 1.f, a));
+      const float sz = (std::max)(1.5f, s.size * 0.85f);
+      out.prims.push_back(MakeSolid(s.x * w_, s.y * h_, sz, sz, 0.f, 0.75f, 0.85f, 1.f, a));
     }
 
-    // Planet / reactor core
+    // Thin grid so aspect/freeze is obvious and silhouette ≠ aurora
     {
-      const float pulse = 1.f + 0.06f * std::sin(t_ * 2.2f);
-      const float hit = planetHitFlash_;
-      float pr = Lerp(0.25f, 1.f, hit);
-      float pg = Lerp(0.55f, 0.4f, hit);
-      float pb = Lerp(0.95f, 0.15f, hit);
-      out.prims.push_back(MakeOrb(cx, cy, 110.f * pulse, pr, pg, pb, 0.95f));
-      out.prims.push_back(MakeOrb(cx, cy, 48.f * pulse, 0.9f, 0.95f, 1.f, 0.85f));
-      float rr, gg, bb;
-      Hsv(std::fmod(0.55f + t_ * 0.03f, 1.f), 0.75f, 1.f, &rr, &gg, &bb);
-      out.prims.push_back(MakeRing(cx, cy, 160.f, 160.f * 0.85f, t_ * 0.35f, rr, gg, bb, 0.4f));
-      Hsv(std::fmod(0.72f + t_ * 0.02f, 1.f), 0.7f, 1.f, &rr, &gg, &bb);
-      out.prims.push_back(MakeRing(cx, cy, 210.f, 210.f * 0.7f, -t_ * 0.22f, rr, gg, bb, 0.28f));
+      const float gridA = 0.12f;
+      for (int i = 1; i < 8; ++i)
+      {
+        const float x = w_ * (i / 8.f);
+        const float y = h_ * (i / 8.f);
+        out.prims.push_back(MakeLine(x, 0.f, x, float(h_), 1.f, 0.15f, 0.35f, 0.45f, gridA));
+        out.prims.push_back(MakeLine(0.f, y, float(w_), y, 1.f, 0.15f, 0.35f, 0.45f, gridA));
+      }
     }
 
-    // Asteroids
+    // Planet: hard core + hard shell + thin outline rings (not soft multi-orb soup)
+    {
+      const float pulse = 1.f + 0.04f * std::sin(t_ * 2.2f);
+      const float hit = planetHitFlash_;
+      float pr = Lerp(0.15f, 1.f, hit);
+      float pg = Lerp(0.45f, 0.25f, hit);
+      float pb = Lerp(0.85f, 0.1f, hit);
+      out.prims.push_back(MakeSolid(cx, cy, 96.f * pulse, 96.f * pulse, 0.f, pr, pg, pb, 1.f));
+      out.prims.push_back(
+          MakeSolid(cx, cy, 52.f * pulse, 52.f * pulse, t_ * 0.4f, 0.05f, 0.12f, 0.22f, 1.f));
+      out.prims.push_back(MakeSolid(cx, cy, 22.f, 22.f, -t_ * 1.1f, 0.9f, 0.95f, 1.f, 1.f));
+      // Thin rings as outlines
+      out.prims.push_back(
+          MakeRing(cx, cy, 150.f, 150.f * 0.55f, t_ * 0.5f, 0.2f, 0.9f, 1.f, 0.85f));
+      out.prims.push_back(
+          MakeRing(cx, cy, 200.f, 200.f * 0.45f, -t_ * 0.35f, 1.f, 0.55f, 0.15f, 0.7f));
+      // Crosshair ticks on planet (reads as "defense target", not aurora diamond)
+      out.prims.push_back(MakeLine(cx - 70.f, cy, cx - 40.f, cy, 2.f, 0.3f, 1.f, 1.f, 0.7f));
+      out.prims.push_back(MakeLine(cx + 40.f, cy, cx + 70.f, cy, 2.f, 0.3f, 1.f, 1.f, 0.7f));
+      out.prims.push_back(MakeLine(cx, cy - 70.f, cx, cy - 40.f, 2.f, 0.3f, 1.f, 1.f, 0.7f));
+      out.prims.push_back(MakeLine(cx, cy + 40.f, cx, cy + 70.f, 2.f, 0.3f, 1.f, 1.f, 0.7f));
+    }
+
+    // Asteroids: angular rock solids only
     for (const auto& a : asteroids_)
     {
       if (!a.alive)
         continue;
       float rr, gg, bb;
-      Hsv(0.08f + 0.04f * std::sin(a.rot), 0.35f, 0.85f, &rr, &gg, &bb);
-      out.prims.push_back(MakeSolid(a.x, a.y, a.r * 1.8f, a.r * 1.8f, a.rot, rr, gg, bb, 0.9f));
-      out.prims.push_back(MakeOrb(a.x, a.y, a.r * 1.2f, rr * 0.7f, gg * 0.7f, bb * 0.7f, 0.5f));
+      Hsv(0.07f, 0.45f, 0.75f, &rr, &gg, &bb);
+      out.prims.push_back(MakeSolid(a.x, a.y, a.r * 2.1f, a.r * 1.6f, a.rot, rr, gg, bb, 1.f));
+      out.prims.push_back(MakeSolid(a.x, a.y, a.r * 1.1f, a.r * 0.9f, a.rot + 0.7f, rr * 0.6f,
+                                    gg * 0.6f, bb * 0.6f, 1.f));
     }
 
-    // Drones
+    // Drones: large cyan triangles (hard silhouette)
     for (const auto& d : drones_)
     {
       const float x = cx + std::cos(d.angle) * d.radius;
       const float y = cy + std::sin(d.angle) * d.radius * 0.72f;
-      float rr, gg, bb;
-      Hsv(0.52f + 0.08f * std::sin(d.angle * 3.f), 0.85f, 1.f, &rr, &gg, &bb);
-      out.prims.push_back(MakeTri(x, y, 14.f, 22.f, d.aim, rr, gg, bb, 0.95f));
-      out.prims.push_back(MakeOrb(x, y, 8.f, 0.4f, 0.9f, 1.f, 0.55f));
+      out.prims.push_back(MakeTri(x, y, 18.f, 28.f, d.aim, 0.15f, 0.95f, 1.f, 1.f));
+      out.prims.push_back(MakeTri(x, y, 10.f, 16.f, d.aim, 1.f, 1.f, 1.f, 0.95f));
+      // Orbit path tick
+      out.prims.push_back(MakeSolid(x, y, 3.f, 3.f, 0.f, 0.2f, 1.f, 0.6f, 0.8f));
     }
 
-    // Shots
+    // Shots: short hard lines (lasers), not soft orbs
     for (const auto& s : shots_)
     {
       if (!s.alive)
         continue;
-      out.prims.push_back(MakeOrb(s.x, s.y, 5.f, 1.f, 0.95f, 0.4f, 0.95f));
-      out.prims.push_back(MakeOrb(s.x, s.y, 10.f, 1.f, 0.5f, 0.1f, 0.35f));
+      const float len = 14.f;
+      const float spd = Length(s.vx, s.vy);
+      float dx = 1.f, dy = 0.f;
+      if (spd > 1.f)
+      {
+        dx = s.vx / spd;
+        dy = s.vy / spd;
+      }
+      out.prims.push_back(MakeLine(s.x - dx * len, s.y - dy * len, s.x + dx * len * 0.3f,
+                                   s.y + dy * len * 0.3f, 2.5f, 1.f, 0.95f, 0.25f, 1.f));
     }
 
-    // Explosion rings
+    // Explosion rings — hard thin rings
     for (const auto& b : booms_)
     {
       if (!b.alive)
         continue;
       const float u = 1.f - (b.life / b.maxLife);
-      const float sz = 20.f + u * 90.f;
-      const float a = (1.f - u) * 0.85f;
-      out.prims.push_back(MakeRing(b.x, b.y, sz, sz, 0.f, 1.f, 0.55f, 0.15f, a));
-      out.prims.push_back(MakeRing(b.x, b.y, sz * 0.6f, sz * 0.6f, 0.f, 1.f, 0.9f, 0.4f, a * 0.7f));
+      const float sz = 24.f + u * 110.f;
+      const float a = (1.f - u) * 0.95f;
+      out.prims.push_back(MakeRing(b.x, b.y, sz, sz, 0.f, 1.f, 0.4f, 0.05f, a));
+      out.prims.push_back(MakeRing(b.x, b.y, sz * 0.55f, sz * 0.55f, 0.f, 1.f, 0.85f, 0.2f, a));
     }
 
-    // Particles
+    // Particles: tiny hard squares
     for (const auto& p : particles_)
     {
       if (!p.alive)
         continue;
       const float u = Clamp(p.life / p.maxLife, 0.f, 1.f);
-      out.prims.push_back(MakeOrb(p.x, p.y, p.size * (0.5f + 0.5f * u), p.r, p.g, p.b, u));
+      const float sz = (std::max)(2.f, p.size * 0.45f);
+      out.prims.push_back(MakeSolid(p.x, p.y, sz, sz, 0.f, p.r, p.g, p.b, u));
     }
 
-    // Shield arc hint (thin ring scaled by shields)
+    // Shield ring
     {
       const float sh = shields_ / 100.f;
       out.prims.push_back(
-          MakeRing(cx, cy, 125.f, 125.f * 0.85f, t_ * 1.5f, 0.3f, 0.9f, 1.f, 0.15f + 0.35f * sh));
+          MakeRing(cx, cy, 118.f, 118.f * 0.9f, t_ * 2.2f, 0.1f, 1.f, 0.55f, 0.25f + 0.55f * sh));
+    }
+
+    // Top banner strip unique to orbital (can't confuse with aurora EQ bars)
+    {
+      out.prims.push_back(
+          MakeSolid(w_ * 0.5f, 18.f, float(w_), 36.f, 0.f, 0.02f, 0.08f, 0.12f, 0.75f));
+      out.prims.push_back(MakeLine(0.f, 36.f, float(w_), 36.f, 2.f, 0.2f, 0.9f, 1.f, 0.9f));
     }
 
     wchar_t buf[128];
-    swprintf_s(buf, L"SCORE %d   SHIELDS %d   WAVE %d", score_, shields_, wave_);
+    swprintf_s(buf, L"ORBITAL  SCORE %d  SHIELDS %d  WAVE %d", score_, shields_, wave_);
     out.hud.line1 = buf;
-    swprintf_s(buf, L"drones %d  rocks %d", kDroneCount, CountAsteroids());
+    swprintf_s(buf, L"drones %d  rocks %d  (no aurora backdrop)", kDroneCount, CountAsteroids());
     out.hud.line2 = buf;
   }
 
