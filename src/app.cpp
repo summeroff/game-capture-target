@@ -82,6 +82,7 @@ bool App::Initialize(std::wstring* error)
     return false;
   if (!CreateRenderer(error))
     return false;
+  InitScene();
 
   // Capture block AFTER renderer is fully up (signature-policy needs driver UMDs loaded).
   if (cfg_.blockCapture != BlockCaptureMode::None)
@@ -210,6 +211,20 @@ bool App::CreateRenderer(std::wstring* error)
       Log("note: --flip-model ignored for api=%s", Narrow(GraphicsApiName(cfg_.api)).c_str());
   }
   return true;
+}
+
+void App::InitScene()
+{
+  scene_ = scene::CreateScene(cfg_.scene);
+  scene::SceneConfig sc;
+  sc.id = cfg_.scene;
+  sc.seed = cfg_.sceneSeed;
+  sc.intensity = 1.f;
+  int cw = cfg_.width, ch = cfg_.height;
+  if (hwnd_)
+    ClientSize(&cw, &ch);
+  scene_->Reset(sc, cw, ch);
+  Log("scene: %s seed=0x%08X", Narrow(scene_->Name()).c_str(), cfg_.sceneSeed);
 }
 
 bool App::ApplyBlockNow(std::wstring* error)
@@ -448,8 +463,14 @@ void App::Frame()
   }
 
   qpcLast_ = now;
+  const double prevElapsed = elapsedSec_;
   elapsedSec_ = static_cast<double>(now.QuadPart - qpcStart_.QuadPart) /
                 static_cast<double>(qpcFreq_.QuadPart);
+  lastDt_ = static_cast<float>(elapsedSec_ - prevElapsed);
+  if (lastDt_ < 0.f)
+    lastDt_ = 0.f;
+  if (lastDt_ > 0.1f)
+    lastDt_ = 0.1f;
 
   if (cfg_.exitAfterSeconds > 0 && elapsedSec_ >= cfg_.exitAfterSeconds)
   {
@@ -466,6 +487,15 @@ void App::Frame()
   int cw = 0, ch = 0;
   ClientSize(&cw, &ch);
 
+  if (scene_)
+  {
+    if (cw > 0 && ch > 0)
+      scene_->Resize(cw, ch);
+    scene_->Update(elapsedSec_, lastDt_, cw > 0 ? cw : cfg_.width, ch > 0 ? ch : cfg_.height);
+    sceneDraw_ = scene::SceneDraw{};
+    scene_->Emit(sceneDraw_);
+  }
+
   FrameInfo fi{};
   fi.frameIndex = frameIndex_;
   fi.elapsedSec = elapsedSec_;
@@ -479,6 +509,9 @@ void App::Frame()
   fi.flipModel = cfg_.flipModel;
   fi.buffers = cfg_.buffers;
   fi.noHud = cfg_.noHud;
+  fi.sceneName = scene_ ? scene_->Name() : scene::SceneIdName(cfg_.scene);
+  fi.sceneSeed = cfg_.sceneSeed;
+  fi.sceneDraw = scene_ ? &sceneDraw_ : nullptr;
 
   if (renderer_)
     renderer_->Render(fi);

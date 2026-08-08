@@ -14,6 +14,9 @@ add_executable(fakegame
   src/app.cpp
   src/profiles.cpp
   src/block_capture.cpp
+  src/scene/scene_factory.cpp
+  src/scene/scene_aurora.cpp
+  src/scene/scene_orbital.cpp
   src/d3d11_renderer.cpp
   src/d3d12_renderer.cpp
   src/vulkan_renderer.cpp

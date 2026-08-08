@@ -370,8 +370,12 @@ public:
     timeSec_ = t;
 
     ctx_->OMSetRenderTargets(1, rtv_.GetAddressOf(), nullptr);
-    // Background shader paints everything; clear is a safety net.
-    const float clear[4] = {0.01f, 0.01f, 0.03f, 1.f};
+
+    const scene::SceneDraw* sd = info.sceneDraw;
+    const float clearR = sd ? sd->clearR : 0.01f;
+    const float clearG = sd ? sd->clearG : 0.01f;
+    const float clearB = sd ? sd->clearB : 0.03f;
+    const float clear[4] = {clearR, clearG, clearB, 1.f};
     ctx_->ClearRenderTargetView(rtv_.Get(), clear);
 
     D3D11_VIEWPORT vp{};
@@ -391,114 +395,40 @@ public:
 
     float ortho[16];
     MatOrthoPixels(ortho, static_cast<float>(width_), static_cast<float>(height_));
+    const float blendFactor[4] = {0, 0, 0, 0};
 
-    // --- Fullscreen procedural backdrop ---
+    // Backdrop
+    const scene::BackdropId bd = sd ? sd->backdrop : scene::BackdropId::Aurora;
+    if (bd == scene::BackdropId::Aurora)
     {
       float scl[16], tr[16], world[16], mvp[16];
       MatScale(scl, static_cast<float>(width_), static_cast<float>(height_));
       MatTranslate(tr, width_ * 0.5f, height_ * 0.5f);
       MatMul(world, tr, scl);
       MatMul(mvp, ortho, world);
-      const float blendFactor[4] = {0, 0, 0, 0};
       ctx_->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
       ctx_->PSSetShader(psBg_.Get(), nullptr, 0);
       UpdateCB(mvp, 1, 1, 1, 1);
       ctx_->Draw(6, 0);
     }
 
-    const float cx = width_ * 0.5f;
-    const float cy = height_ * 0.55f;
-    const float blendFactor[4] = {0, 0, 0, 0};
-    ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
-
-    // --- Outer spinning ring of orbs ---
-    ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
-    constexpr int kOrbs = 14;
-    for (int i = 0; i < kOrbs; ++i)
+    // Scene primitives
+    if (sd)
     {
-      const float a0 = t * 0.7f + i * (6.2831853f / kOrbs);
-      const float radius = 180.f + 40.f * std::sin(t * 1.1f + i * 0.4f);
-      const float ox = cx + std::cos(a0) * radius;
-      const float oy = cy + std::sin(a0) * radius * 0.62f;
-      const float sz = 28.f + 10.f * std::sin(t * 3.0f + i);
-      const float hue = std::fmod(t * 0.08f + i / float(kOrbs), 1.f);
-      float rr, gg, bb;
-      Hsv(hue, 0.85f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, ox, oy, 0.f, sz, sz, rr, gg, bb, 0.9f);
-    }
+      for (const auto& p : sd->prims)
+        DrawPrim(ortho, p);
 
-    // --- Counter-rotating inner ring ---
-    for (int i = 0; i < 8; ++i)
-    {
-      const float a0 = -t * 1.3f + i * (6.2831853f / 8);
-      const float radius = 90.f + 18.f * std::cos(t * 2.0f + i);
-      const float ox = cx + std::cos(a0) * radius;
-      const float oy = cy + std::sin(a0) * radius * 0.7f;
-      float rr, gg, bb;
-      Hsv(std::fmod(0.45f + i * 0.08f + t * 0.05f, 1.f), 0.7f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, ox, oy, 0.f, 18.f, 18.f, rr, gg, bb, 0.85f);
-    }
-
-    // --- Big soft rings ---
-    ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
-    for (int i = 0; i < 3; ++i)
-    {
-      const float pulse = 1.f + 0.12f * std::sin(t * 2.5f + i);
-      const float sz = (220.f + i * 90.f) * pulse;
-      float rr, gg, bb;
-      Hsv(std::fmod(0.55f + i * 0.12f + t * 0.03f, 1.f), 0.8f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, cx, cy, t * (0.4f + i * 0.2f), sz, sz * 0.7f, rr, gg, bb, 0.35f);
-    }
-
-    // --- Comet: bright orb + trailing ghosts ---
-    ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
-    {
-      const float ca = t * 1.15f;
-      const float cr = 250.f + 60.f * std::sin(t * 0.6f);
-      const float cox = cx + std::cos(ca) * cr;
-      const float coy = cy + std::sin(ca) * cr * 0.5f;
-      for (int trail = 7; trail >= 0; --trail)
+      // Fullscreen flash (additive)
+      if (sd->flashA > 0.001f)
       {
-        const float ta = ca - trail * 0.08f;
-        const float trr = cr - trail * 6.f;
-        const float tx = cx + std::cos(ta) * trr;
-        const float ty = cy + std::sin(ta) * trr * 0.5f;
-        const float sz = 42.f - trail * 4.f;
-        const float al = 0.95f - trail * 0.1f;
-        float rr, gg, bb;
-        Hsv(std::fmod(0.08f + trail * 0.02f + t * 0.1f, 1.f), 0.9f, 1.f, &rr, &gg, &bb);
-        DrawTransformed(ortho, tx, ty, 0.f, sz, sz, rr, gg, bb, al);
+        ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+        ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+        DrawTransformed(ortho, width_ * 0.5f, height_ * 0.5f, 0.f, float(width_), float(height_),
+                        sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.65f);
       }
-      DrawTransformed(ortho, cox, coy, 0.f, 56.f, 56.f, 1.f, 0.95f, 0.8f, 1.f);
     }
 
-    // --- Audio-style bars along the bottom (purely visual) ---
-    ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
-    ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
-    constexpr int kBars = 48;
-    const float barW = width_ / float(kBars);
-    for (int i = 0; i < kBars; ++i)
-    {
-      const float n = 0.5f + 0.5f * std::sin(t * 4.0f + i * 0.45f) * std::cos(t * 2.3f + i * 0.17f);
-      const float h = (30.f + n * (height_ * 0.22f));
-      const float bx = (i + 0.5f) * barW;
-      const float by = height_ - h * 0.5f - 8.f;
-      float rr, gg, bb;
-      Hsv(std::fmod(i / float(kBars) + t * 0.15f, 1.f), 0.85f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, bx, by, 0.f, barW * 0.72f, h, rr, gg, bb, 0.75f);
-    }
-
-    // --- Spinning diamond core ---
-    {
-      const float ang = t * 1.8f;
-      const float sz = 70.f + 15.f * std::sin(t * 4.0f);
-      float rr, gg, bb;
-      Hsv(std::fmod(t * 0.2f, 1.f), 0.6f, 1.f, &rr, &gg, &bb);
-      DrawTransformed(ortho, cx, cy, ang, sz, sz, rr, gg, bb, 0.9f);
-      DrawTransformed(ortho, cx, cy, ang + 0.785f, sz * 0.55f, sz * 0.55f, 1.f, 1.f, 1.f, 0.7f);
-    }
-
-    // Large frame counter — still the capture-liveness tell.
+    // HUD
     if (!info.noHud)
     {
       ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
@@ -506,7 +436,6 @@ public:
       sprintf_s(big, "%llu", static_cast<unsigned long long>(info.frameIndex));
       const float scale = 7.f;
       const float tw = static_cast<float>(std::strlen(big)) * font8x8::kGlyphW * scale;
-      // Soft shadow then bright glyph
       DrawTextPx(big, (width_ - tw) * 0.5f + 3.f, height_ * 0.12f + 3.f, scale, 0.f, 0.f, 0.f,
                  0.55f);
       DrawTextPx(big, (width_ - tw) * 0.5f, height_ * 0.12f, scale, 1.f, 0.95f, 0.35f, 1.f);
@@ -525,6 +454,10 @@ public:
       lines.emplace_back(line);
       sprintf_s(line, "mode   %s", Narrow(WindowModeName(info.mode)).c_str());
       lines.emplace_back(line);
+      sprintf_s(line, "scene  %s", Narrow(info.sceneName ? info.sceneName : L"?").c_str());
+      lines.emplace_back(line);
+      sprintf_s(line, "seed   0x%08X", info.sceneSeed);
+      lines.emplace_back(line);
       sprintf_s(line, "class  %s", Narrow(info.windowClass).c_str());
       lines.emplace_back(line);
       sprintf_s(line, "title  %s", Narrow(info.windowTitle).c_str());
@@ -533,6 +466,10 @@ public:
       lines.emplace_back(line);
       sprintf_s(line, "time   %.2fs", info.elapsedSec);
       lines.emplace_back(line);
+      if (sd && !sd->hud.line1.empty())
+        lines.emplace_back(Narrow(sd->hud.line1));
+      if (sd && !sd->hud.line2.empty())
+        lines.emplace_back(Narrow(sd->hud.line2));
       sprintf_s(line, "hotkeys F1-F7 / Esc");
       lines.emplace_back(line);
 
@@ -1009,6 +946,102 @@ private:
   {
     UpdateCB(mvp, r, g, b, a);
     ctx_->Draw(6, 0);
+  }
+
+  void DrawPrim(const float* ortho, const scene::Prim& p)
+  {
+    const float blendFactor[4] = {0, 0, 0, 0};
+    switch (p.kind)
+    {
+    case scene::PrimKind::QuadOrb:
+      ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psOrb_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, p.rot, p.w, p.h, p.r, p.g, p.b, p.a);
+      break;
+    case scene::PrimKind::QuadRing:
+      ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, p.rot, p.w, p.h, p.r, p.g, p.b, p.a);
+      break;
+    case scene::PrimKind::QuadSolid:
+      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, p.rot, p.w, p.h, p.r, p.g, p.b, p.a);
+      break;
+    case scene::PrimKind::Line: {
+      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      const float dx = p.x2 - p.x;
+      const float dy = p.y2 - p.y;
+      const float len = std::sqrt(dx * dx + dy * dy);
+      if (len < 0.5f)
+        break;
+      const float ang = std::atan2(dy, dx);
+      const float mx = (p.x + p.x2) * 0.5f;
+      const float my = (p.y + p.y2) * 0.5f;
+      const float thick = p.w > 0.5f ? p.w : 2.f;
+      DrawTransformed(ortho, mx, my, ang, len, thick, p.r, p.g, p.b, p.a);
+      break;
+    }
+    case scene::PrimKind::Triangle: {
+      ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      DrawTriangle(ortho, p);
+      break;
+    }
+    case scene::PrimKind::CircleOutline:
+      ctx_->OMSetBlendState(blendAdd_.Get(), blendFactor, 0xFFFFFFFF);
+      ctx_->PSSetShader(psRing_.Get(), nullptr, 0);
+      DrawTransformed(ortho, p.x, p.y, 0.f, p.w * 2.f, p.w * 2.f, p.r, p.g, p.b, p.a);
+      break;
+    }
+  }
+
+  void DrawTriangle(const float* ortho, const scene::Prim& p)
+  {
+    // Isosceles triangle in local space: tip at (0,-h/2) before rotation?
+    // Tip along +rot axis (screen: rot=0 points +X). Local tip at (+h/2,0), base at -h/2.
+    EnsureDynVb();
+    const float cs = std::cos(p.rot);
+    const float sn = std::sin(p.rot);
+    const float halfB = p.w * 0.5f;
+    const float halfH = p.h * 0.5f;
+    // Local verts: tip, base-left, base-right
+    const float lx[3] = {halfH, -halfH, -halfH};
+    const float ly[3] = {0.f, -halfB, halfB};
+    Vertex verts[6];
+    auto put = [&](int i, float lx_, float ly_) {
+      const float wx = p.x + lx_ * cs - ly_ * sn;
+      const float wy = p.y + lx_ * sn + ly_ * cs;
+      verts[i] = {wx, wy, 0.f, 0.f};
+    };
+    put(0, lx[0], ly[0]);
+    put(1, lx[1], ly[1]);
+    put(2, lx[2], ly[2]);
+    // Degenerate second tri unused — draw 3 verts only via topology; we keep triangle list of 1 tri.
+    // Use 3 verts: upload 3, but unit path draws 6. Upload triangle twice as degenerate quad? Better: draw 3.
+    verts[3] = verts[0];
+    verts[4] = verts[2];
+    verts[5] = verts[1];
+
+    D3D11_MAPPED_SUBRESOURCE map{};
+    if (FAILED(ctx_->Map(dynVb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+      return;
+    std::memcpy(map.pData, verts, sizeof(Vertex) * 3);
+    ctx_->Unmap(dynVb_.Get(), 0);
+
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    ctx_->IASetVertexBuffers(0, 1, dynVb_.GetAddressOf(), &stride, &offset);
+
+    // Identity world — verts already in pixels; only ortho.
+    float mvp[16];
+    std::memcpy(mvp, ortho, sizeof(float) * 16);
+    UpdateCB(mvp, p.r, p.g, p.b, p.a);
+    ctx_->Draw(3, 0);
+
+    // Restore unit VB
+    ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
   }
 
   void DrawTransformed(const float* ortho, float x, float y, float rot, float sx, float sy, float r,
