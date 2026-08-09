@@ -29,6 +29,7 @@ constexpr char kShaderSrc[] = R"(
 cbuffer CB : register(b0) {
   float4x4 uTransform;
   float4   uColor;
+  float4   uTimeRes; // x=time
 };
 struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; };
 struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 col : COLOR0; };
@@ -42,7 +43,26 @@ VSOut VSMain(VSIn i) {
 }
 Texture2D gTex : register(t0);
 SamplerState gSamp : register(s0);
+float3 hsv2rgb(float h, float s, float v) {
+  float3 p = abs(frac(h + float3(0, 2./3., 1./3.)) * 6 - 3);
+  return v * lerp(1, saturate(p - 1), s);
+}
 float4 PSSolid(VSOut i) : SV_Target { return i.col; }
+// Cheap material for scene solids/tris (d3d11 is reference quality).
+// Quad UV edge only — d3d12 approximates tris with unit quads (no bary path).
+float4 PSMaterial(VSOut i) : SV_Target {
+  float2 uv = i.uv;
+  float2 p = uv * 2 - 1;
+  float edge = min(min(uv.x, 1 - uv.x), min(uv.y, 1 - uv.y));
+  float rim = saturate(1 - edge * 5);
+  float n = frac(sin(dot(uv * 40 + uTimeRes.x * 0.1, float2(12.9, 78.2))) * 43758.5);
+  float3 c = i.col.rgb * (0.55 + 0.25 * (1 - length(p)) + 0.1 * n);
+  c += i.col.rgb * rim * 0.45;
+  c += hsv2rgb(frac(0.55 + length(p) * 0.2), 0.4, 1) * rim * 0.25;
+  float a = i.col.a * smoothstep(0, 0.03, edge);
+  a = max(a, i.col.a * 0.9);
+  return float4(c, min(a, i.col.a));
+}
 float4 PSText(VSOut i) : SV_Target {
   float a = gTex.Sample(gSamp, i.uv).r;
   return float4(i.col.rgb, i.col.a * a);
@@ -58,6 +78,7 @@ struct CBData
 {
   float transform[16];
   float color[4];
+  float timeRes[4];
 };
 
 void MatIdentity(float* m)
@@ -127,6 +148,8 @@ public:
     mode_ = cfg.mode;
     if (!CreateDevice(error))
       return false;
+    if (!AllocateGpuMem(error))
+      return false;
     if (!CreateSwapchain(error))
       return false;
     if (!CreatePipeline(error))
@@ -144,6 +167,7 @@ public:
     if (queue_ && fence_ && fenceEvent_)
       WaitGpu();
 
+    gpuMem_.clear();
     for (UINT i = 0; i < kFrameCount; ++i)
       renderTargets_[i].Reset();
     swapchain_.Reset();
@@ -151,6 +175,7 @@ public:
     for (auto& a : cmdAlloc_)
       a.Reset();
     pipelineSolid_.Reset();
+    pipelineMaterial_.Reset();
     pipelineText_.Reset();
     rootSig_.Reset();
     vb_.Reset();
@@ -254,6 +279,7 @@ public:
       return;
     const UINT fi = frameIndex_ % kFrameCount;
     WaitFrame(fi);
+    timeSec_ = static_cast<float>(info.elapsedSec);
 
     cmdAlloc_[fi]->Reset();
     cmdList_->Reset(cmdAlloc_[fi].Get(), pipelineSolid_.Get());
@@ -301,15 +327,16 @@ public:
 
       if (sd->flashA > 0.001f)
       {
+        // Flat solid — not material (uniform flash).
         DrawSolidXform(fi, ortho, width_ * 0.5f, height_ * 0.5f, 0.f, float(width_), float(height_),
-                       sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.45f);
+                       sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.45f, false);
       }
     } else
     {
       // Fallback motion if scene missing
       const float t = static_cast<float>(info.elapsedSec);
       const float cx = width_ * 0.5f, cy = height_ * 0.5f;
-      DrawSolidXform(fi, ortho, cx, cy, t * 2.2f, 90.f, 90.f, 0.8f, 0.5f, 0.9f, 1.f);
+      DrawSolidXform(fi, ortho, cx, cy, t * 2.2f, 90.f, 90.f, 0.8f, 0.5f, 0.9f, 1.f, true);
     }
 
     if (!info.noHud)
@@ -515,7 +542,7 @@ private:
 
   bool CreatePipeline(std::wstring* error)
   {
-    ComPtr<ID3DBlob> vs, psSolid, psText, err;
+    ComPtr<ID3DBlob> vs, psSolid, psMat, psText, err;
     auto compile = [&](const char* entry, const char* target, ComPtr<ID3DBlob>& out) -> bool {
       err.Reset();
       HRESULT hr = D3DCompile(kShaderSrc, sizeof(kShaderSrc), "d3d12.hlsl", nullptr, nullptr, entry,
@@ -534,6 +561,8 @@ private:
     if (!compile("VSMain", "vs_5_0", vs))
       return false;
     if (!compile("PSSolid", "ps_5_0", psSolid))
+      return false;
+    if (!compile("PSMaterial", "ps_5_0", psMat))
       return false;
     if (!compile("PSText", "ps_5_0", psText))
       return false;
@@ -624,6 +653,8 @@ private:
       return true;
     };
     if (!makePso(psSolid.Get(), false, pipelineSolid_))
+      return false;
+    if (!makePso(psMat.Get(), true, pipelineMaterial_))
       return false;
     if (!makePso(psText.Get(), true, pipelineText_))
       return false;
@@ -805,10 +836,14 @@ private:
     p->color[1] = g;
     p->color[2] = b;
     p->color[3] = a;
+    p->timeRes[0] = timeSec_;
+    p->timeRes[1] = float(width_);
+    p->timeRes[2] = float(height_);
+    p->timeRes[3] = 0.f;
   }
 
   void DrawSolidXform(UINT fi, const float* ortho, float x, float y, float rot, float sx, float sy,
-                      float r, float g, float b, float a)
+                      float r, float g, float b, float a, bool material = true)
   {
     if (cbSlot_ >= kMaxCbSlots)
       return;
@@ -821,7 +856,7 @@ private:
     MatMul(mvp, ortho, world);
     const UINT slot = cbSlot_++;
     SetCBSlot(fi, slot, mvp, r, g, b, a);
-    cmdList_->SetPipelineState(pipelineSolid_.Get());
+    cmdList_->SetPipelineState(material ? pipelineMaterial_.Get() : pipelineSolid_.Get());
     cmdList_->SetGraphicsRootConstantBufferView(0, cbGpu_[fi] + slot * 256);
     cmdList_->DrawInstanced(6, 1, 0, 0);
   }
@@ -846,7 +881,7 @@ private:
         w *= 0.85f;
         h *= 0.85f;
       }
-      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, w, h, p.r, p.g, p.b, p.a);
+      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, w, h, p.r, p.g, p.b, p.a, true);
       break;
     }
     case scene::PrimKind::Line: {
@@ -858,12 +893,12 @@ private:
       const float ang = std::atan2(dy, dx);
       const float thick = p.w > 0.5f ? p.w : 2.f;
       DrawSolidXform(fi, ortho, (p.x + p.x2) * 0.5f, (p.y + p.y2) * 0.5f, ang, len, thick, p.r, p.g,
-                     p.b, p.a);
+                     p.b, p.a, true);
       break;
     }
     case scene::PrimKind::Triangle:
       // Approx triangle as rotated diamond/rect (good enough for freeze-tell on d3d12).
-      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, p.h, p.w * 0.65f, p.r, p.g, p.b, p.a);
+      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, p.h, p.w * 0.65f, p.r, p.g, p.b, p.a, true);
       break;
     }
   }
@@ -973,6 +1008,7 @@ private:
   D3D12_VERTEX_BUFFER_VIEW vbView_{};
   D3D12_GPU_VIRTUAL_ADDRESS cbGpu_[kFrameCount]{};
   uint8_t* cbMapped_[kFrameCount]{};
+  float timeSec_ = 0.f;
 
   ComPtr<IDXGIFactory4> factory_;
   ComPtr<ID3D12Device> device_;
@@ -986,11 +1022,60 @@ private:
   ComPtr<ID3D12Fence> fence_;
   ComPtr<ID3D12RootSignature> rootSig_;
   ComPtr<ID3D12PipelineState> pipelineSolid_;
+  ComPtr<ID3D12PipelineState> pipelineMaterial_;
   ComPtr<ID3D12PipelineState> pipelineText_;
   ComPtr<ID3D12Resource> vb_;
   ComPtr<ID3D12Resource> cb_[kFrameCount];
   ComPtr<ID3D12Resource> fontTex_;
   ComPtr<ID3D12Resource> fontUpload_;
+  std::vector<ComPtr<ID3D12Resource>> gpuMem_;
+
+  bool AllocateGpuMem(std::wstring* error)
+  {
+    gpuMem_.clear();
+    if (cfg_.gpuMemMb <= 0 || !device_)
+      return true;
+
+    const size_t totalBytes = static_cast<size_t>(cfg_.gpuMemMb) * 1024ull * 1024ull;
+    constexpr size_t kChunk = 64ull * 1024ull * 1024ull;
+    size_t allocated = 0;
+    while (allocated < totalBytes)
+    {
+      size_t n = totalBytes - allocated;
+      if (n > kChunk)
+        n = kChunk;
+      n = (n + 255ull) & ~255ull;
+      if (n == 0)
+        break;
+
+      D3D12_HEAP_PROPERTIES hp{};
+      hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+      D3D12_RESOURCE_DESC rd{};
+      rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+      rd.Width = n;
+      rd.Height = 1;
+      rd.DepthOrArraySize = 1;
+      rd.MipLevels = 1;
+      rd.SampleDesc.Count = 1;
+      rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+      ComPtr<ID3D12Resource> res;
+      const HRESULT hr = device_->CreateCommittedResource(
+          &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res));
+      if (FAILED(hr))
+      {
+        Log("d3d12: gpu-mem alloc failed at %zu / %d MB (hr=0x%08X)",
+            allocated / (1024ull * 1024ull), cfg_.gpuMemMb, static_cast<unsigned>(hr));
+        *error = L"GPU memory allocation failed (try a smaller --gpu-mem)";
+        gpuMem_.clear();
+        return false;
+      }
+      gpuMem_.push_back(std::move(res));
+      allocated += n;
+    }
+    Log("d3d12: holding gpu-mem %d MB (%zu buffers, %zu bytes)", cfg_.gpuMemMb, gpuMem_.size(),
+        allocated);
+    return true;
+  }
 };
 
 } // namespace

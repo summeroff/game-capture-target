@@ -95,6 +95,37 @@ bool ParseApi(const std::wstring& v, GraphicsApi* out)
   return false;
 }
 
+// Presets only: 0, 100, 500, 1024 (1gb), 2048 (2gb). Accepts 100mb / 1g / 1gb forms.
+bool ParseGpuMemMb(const std::wstring& v, int* out)
+{
+  if (EqI(v, L"0") || EqI(v, L"off") || EqI(v, L"none"))
+  {
+    *out = 0;
+    return true;
+  }
+  if (EqI(v, L"100") || EqI(v, L"100mb") || EqI(v, L"100m"))
+  {
+    *out = 100;
+    return true;
+  }
+  if (EqI(v, L"500") || EqI(v, L"500mb") || EqI(v, L"500m"))
+  {
+    *out = 500;
+    return true;
+  }
+  if (EqI(v, L"1024") || EqI(v, L"1gb") || EqI(v, L"1g"))
+  {
+    *out = 1024;
+    return true;
+  }
+  if (EqI(v, L"2048") || EqI(v, L"2gb") || EqI(v, L"2g"))
+  {
+    *out = 2048;
+    return true;
+  }
+  return false;
+}
+
 bool ApplyKeyValue(Config* c, const std::wstring& key, const std::wstring& value,
                    std::wstring* error)
 {
@@ -203,6 +234,16 @@ bool ApplyKeyValue(Config* c, const std::wstring& key, const std::wstring& value
     if (!ParseBool(value, &c->noHud))
     {
       *error = L"invalid no-hud";
+      return false;
+    }
+    return true;
+  }
+  if (EqI(key, L"gpu-mem") || EqI(key, L"gpu_mem") || EqI(key, L"gpu-mem-mb") ||
+      EqI(key, L"gpu_mem_mb") || EqI(key, L"vram") || EqI(key, L"vram-mb"))
+  {
+    if (!ParseGpuMemMb(value, &c->gpuMemMb))
+    {
+      *error = L"invalid gpu-mem (100|500|1024|2048 or 100mb|500mb|1gb|2gb)";
       return false;
     }
     return true;
@@ -392,6 +433,7 @@ void PrintConfig(const Config& c)
   Log("  scene-seed  = 0x%08X (%u)", c.sceneSeed, c.sceneSeed);
   if (!c.dumpFramePath.empty())
     Log("  dump-frame  = %s", Narrow(c.dumpFramePath).c_str());
+  Log("  gpu-mem-mb  = %d", c.gpuMemMb);
   Log("  block-capture = %s", Narrow(BlockCaptureModeName(c.blockCapture)).c_str());
   Log("  block-after = %d", c.blockCaptureAfterSeconds);
   Log("  show-block-errors = %d", c.showBlockErrors ? 1 : 0);
@@ -423,6 +465,7 @@ Options:
   --scene-seed <u32>        Deterministic scene RNG seed (default: 0xC5A2EE)
   --list-scenes             Print scene table
   --dump-frame <path.bmp>   d3d11: write one framebuffer BMP after a few frames
+  --gpu-mem <size>          Hold GPU RAM: 100|500|1024|2048 or 100mb|500mb|1gb|2gb
   --config <path>           INI file; flags override file values
   --profile <name>          Apply game profile (title/class/block defaults)
   --list-profiles           Print profile table
@@ -436,6 +479,7 @@ Scenes:
   aurora   Nebula, orb rings, comet, EQ bars (default freeze-tell)
   orbital  Drones vs asteroids, particles, explosions, screen flash
   highway  Night neon highway: perspective road, traffic, speedo
+  fractal  Fullscreen twigl-style raymarch (seed picks variant A/B)
 
 Capture blocking:
   signature-policy  SetProcessMitigationPolicy(MicrosoftSignedOnly) AFTER the
@@ -713,6 +757,19 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
       if (!ConsumeValue(argc, argv, &i, &v, error, L"--dump-frame"))
         return false;
       c.dumpFramePath = v;
+      continue;
+    }
+    if (EqI(a, L"--gpu-mem") || EqI(a, L"--gpu-mem-mb") || EqI(a, L"--vram") ||
+        EqI(a, L"--vram-mb"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--gpu-mem"))
+        return false;
+      if (!ParseGpuMemMb(v, &c.gpuMemMb))
+      {
+        *error = L"invalid gpu-mem (100|500|1024|2048 or 100mb|500mb|1gb|2gb)";
+        return false;
+      }
       continue;
     }
     if (EqI(a, L"--show-block-errors"))

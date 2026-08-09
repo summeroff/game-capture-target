@@ -18,6 +18,7 @@ add_executable(fakegame
   src/scene/scene_aurora.cpp
   src/scene/scene_orbital.cpp
   src/scene/scene_highway.cpp
+  src/scene/scene_fractal.cpp
   src/d3d11_renderer.cpp
   src/d3d12_renderer.cpp
   src/vulkan_renderer.cpp

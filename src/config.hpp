@@ -42,6 +42,9 @@ struct Config
   scene::SceneId scene = scene::SceneId::Aurora;
   uint32_t sceneSeed = 0x00C5A2EEu;
   std::wstring dumpFramePath; // if set, d3d11 writes one BMP after a few frames
+  // Hold GPU memory for capture/VRAM stress tests. 0 = off.
+  // Presets: 100, 500, 1024 (1GB), 2048 (2GB).
+  int gpuMemMb = 0;
 
   BlockCaptureMode blockCapture = BlockCaptureMode::None;
   int blockCaptureAfterSeconds = 0; // 0 = apply immediately (if mode != none)

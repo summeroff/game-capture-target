@@ -27,7 +27,7 @@ cbuffer CB : register(b0)
 {
     float4x4 uTransform;
     float4   uColor;    // rgb + alpha multiplier
-    float4   uTimeRes;  // x=time sec, y=width, z=height, w=mode (0 solid,1 unused)
+    float4   uTimeRes;  // x=time sec, y=width, z=height, w=matMode (0=quad edge, 1=tri bary)
 };
 
 struct VSIn {
@@ -61,6 +61,20 @@ float3 hsv2rgb(float h, float s, float v)
     return v * lerp(float3(1,1,1), saturate(p - 1.0), s);
 }
 
+float2 rot2(float2 p, float a)
+{
+    float c = cos(a), s = sin(a);
+    return float2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+// Rodrigues rotation of p around unit axis n by angle a.
+float3 rot3(float3 p, float a, float3 n)
+{
+    n = normalize(n);
+    float c = cos(a), s = sin(a);
+    return p * c + cross(n, p) * s + n * dot(n, p) * (1.0 - c);
+}
+
 // Fullscreen procedural backdrop — aurora + soft tunnel + twinkles.
 float4 PSBackground(VSOut i) : SV_Target
 {
@@ -75,12 +89,14 @@ float4 PSBackground(VSOut i) : SV_Target
     // Deep space base
     float3 col = float3(0.015, 0.01, 0.04);
 
-    // Slow color nebula
+    // Slow color nebula (extra octave for denser material feel)
     float n1 = sin(p.x * 3.1 + t * 0.35) * cos(p.y * 2.7 - t * 0.28);
     float n2 = sin((p.x + p.y) * 4.2 - t * 0.55) * 0.5;
     float n3 = cos(p.x * 1.7 - p.y * 2.3 + t * 0.2);
-    float neb = saturate(0.55 + 0.45 * (n1 + n2 * 0.7 + n3 * 0.4));
+    float n4 = sin(p.x * 7.3 - p.y * 5.1 + t * 0.9) * cos(p.y * 6.2 + t * 0.4);
+    float neb = saturate(0.55 + 0.45 * (n1 + n2 * 0.7 + n3 * 0.4 + n4 * 0.25));
     col += hsv2rgb(frac(0.62 + t * 0.02 + neb * 0.15), 0.65, 0.22) * neb;
+    col += hsv2rgb(frac(0.85 + neb * 0.2 - t * 0.015), 0.55, 0.12) * saturate(n4);
 
     // Aurora curtains
     float wave = sin(p.x * 2.5 + t * 0.9) * 0.25
@@ -115,33 +131,215 @@ float4 PSBackground(VSOut i) : SV_Target
     return float4(col, 1.0);
 }
 
+// Twigl-style log-space tunnel raymarch (variant A). Heavy on purpose.
+float4 PSFractalA(VSOut i) : SV_Target
+{
+    float t = uTimeRes.x;
+    float2 r = float2(max(uTimeRes.y, 1.0), max(uTimeRes.z, 1.0));
+    // FC.xy from UV; match twigl: (FC*2-r)/r.x
+    float2 FC = i.uv * r;
+    float3 d = float3((FC * 2.0 - r) / r.x * 0.3 + float2(0.0, 1.0), 1.0);
+    float3 q = float3(0.0, -1.0, -1.0);
+    float3 o = 0.0;
+    float e = 0.0;
+    float g = 0.0;
+    float R = 0.0;
+    [loop] for (int ii = 0; ii < 72; ++ii)
+    {
+        float i = (float)(ii + 1);
+        e += i / 9e9;
+        o.rgb += hsv2rgb(0.1, saturate(0.5 + 0.5 * q.y), min(e * i, 0.01));
+        float s = 3.0;
+        q += d * e * R * 0.25;
+        float3 p = q;
+        g += p.y / s;
+        R = length(p);
+        p = float3(log2(max(R, 1e-5)) + t * 0.2, exp2(fmod(-p.z, s) / max(R, 1e-5)) - 0.3, p.x);
+        // pack z as original p (swizzle abuse in source uses p as mixed) — keep energy
+        p.z = q.z;
+        p.y -= 1.0;
+        e = p.y;
+        [loop] for (int k = 0; k < 12; ++k)
+        {
+            e += -abs(dot(sin(p.xz * s), cos(p.zy * s)) / s * 0.4);
+            s += s;
+            if (s >= 6000.0)
+                break;
+        }
+    }
+    o.rgb = saturate(o.rgb * 1.15);
+    return float4(o.rgb, 1.0);
+}
+
+// Twigl-style spiral raymarch (variant B).
+float4 PSFractalB(VSOut i) : SV_Target
+{
+    float t = uTimeRes.x;
+    float2 r = float2(max(uTimeRes.y, 1.0), max(uTimeRes.z, 1.0));
+    float2 FC = i.uv * r;
+    float3 d = float3(FC / r - float2(0.5, -0.3), 0.8);
+    float3 q = float3(0.0, -1.0, -1.0);
+    float3 o = 0.0;
+    float e = 0.0;
+    float R = 0.0;
+    [loop] for (int ii = 0; ii < 80; ++ii)
+    {
+        float i = (float)(ii + 1);
+        float s = 1.0;
+        // Accumulate glow; clamp per-step so late frames don't white-out
+        o.rgb += hsv2rgb(frac(0.08 + 0.02 * q.z + t * 0.02), 0.7,
+                         min(max(e, 0.0) * s + 0.0015 * i, 0.55) / 28.0);
+        q += d * max(e, 0.002) * max(R, 0.15) * 0.22;
+        float3 p = q;
+        R = length(p);
+        p = float3(log(max(R, 1e-5)) - t * 0.8, exp(0.8 - p.z / max(R, 1e-5)), atan2(p.y, p.x) + t * 0.4);
+        p.y -= 1.0;
+        e = p.y;
+        [loop] for (int k = 0; k < 10; ++k)
+        {
+            e += dot(sin(p.yzz * s) - 0.5, 0.8 - sin(p.zxx * s)) / s * 0.3;
+            s += s;
+            if (s >= 300.0)
+                break;
+        }
+    }
+    // Floor + mild boost — keep spiral structure without crushing to black/white
+    o.rgb = o.rgb * 1.35 + float3(0.015, 0.02, 0.05);
+    float vig = saturate(1.15 - length(i.uv - float2(0.5, 0.45)) * 1.1);
+    o.rgb *= 0.55 + 0.55 * vig;
+    o.rgb = saturate(o.rgb);
+    return float4(o.rgb, 1.0);
+}
+
+// Folded starfield / kaleidoscopic space (for Starfield backdrop).
+float4 PSStarfold(VSOut i) : SV_Target
+{
+    float t = uTimeRes.x;
+    float2 r = float2(max(uTimeRes.y, 1.0), max(uTimeRes.z, 1.0));
+    float2 FC = i.uv * r;
+    float3 o = 0.0;
+    float g = 0.0;
+    [loop] for (int ii = 0; ii < 64; ++ii)
+    {
+        float i = (float)(ii + 1);
+        float2 nd = (FC - 0.5 * r) / r.y * 0.6 + float2(0.0, 1.0);
+        float3 p = float3(nd, g - 8.0);
+        p = rot3(p, 3.0, float3(0.0, 9.0, -3.0));
+        p.xz = rot2(p.xz, t * 0.3);
+        float s = 7.0;
+        float e = 1.0;
+        [loop] for (int k = 0; k < 12; ++k)
+        {
+            e = 7.0 / max(dot(p, p * 0.47), 1e-4);
+            s *= e;
+            p = float3(1.0, 4.1, -1.0) - abs(abs(p) * e - float3(3.0, 4.0, 3.0));
+        }
+        g += p.y / s * 1.4;
+        s = log2(max(s, 1e-4)) - g;
+        o.rgb += hsv2rgb(s / max(g, 1e-3) * p.z, 0.7, s / 1e2);
+    }
+    // Deep space floor so empty regions aren't pure black crush
+    o.rgb = max(o.rgb, float3(0.01, 0.012, 0.03));
+    o.rgb = saturate(o.rgb);
+    return float4(o.rgb, 1.0);
+}
+
 float4 PSSolid(VSOut i) : SV_Target
 {
     return i.col;
 }
 
+// Material fill for scene solids/tris: rim, micro-noise, iridescent sheen, soft AA.
+// uTimeRes.w selects edge metric: 0 = unit-quad UV edge, 1 = barycentric (triangle verts).
+float4 PSMaterial(VSOut i) : SV_Target
+{
+    float t = uTimeRes.x;
+    float2 uv = i.uv;
+    float2 p = uv * 2.0 - 1.0;
+
+    float edge;
+    if (uTimeRes.w > 0.5)
+    {
+        // Explicit triangle path: UV is barycentric (tip=1,0 / baseL=0,1 / baseR=0,0).
+        float3 bary = float3(uv.x, uv.y, 1.0 - uv.x - uv.y);
+        edge = min(bary.x, min(bary.y, bary.z));
+    } else
+    {
+        // Unit-quad path only — never infer tri from UV (x+y<=1 looks like bary).
+        edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    }
+
+    float aa = smoothstep(0.0, 0.035, edge);
+    float rim = saturate(1.0 - edge * 6.0);
+    rim = rim * rim;
+
+    float n = frac(sin(dot(uv * float2(37.1, 53.7) + t * 0.15, float2(12.9898, 78.233))) * 43758.5453);
+    float n2 = frac(sin(dot(uv * float2(91.3, 17.2) - t * 0.07, float2(39.346, 11.135))) * 24634.6345);
+
+    float rlen = length(p);
+    float fres = pow(saturate(rlen), 2.2);
+
+    float2 lp = float2(sin(t * 0.7), cos(t * 0.55)) * 0.35;
+    float spec = pow(saturate(1.0 - length(p - lp) * 1.7), 14.0);
+    float spec2 = pow(saturate(1.0 - length(p + lp.yx * float2(-1, 1)) * 2.1), 8.0);
+
+    float3 base = i.col.rgb;
+    float3 irid = hsv2rgb(frac(0.55 + rlen * 0.2 + t * 0.03 + n * 0.04), 0.55, 1.0);
+    float3 cool = hsv2rgb(frac(0.58 + edge * 0.3 - t * 0.02), 0.35, 1.0);
+
+    float3 c = base * (0.42 + 0.28 * (1.0 - rlen) + 0.08 * n + 0.06 * n2);
+    // Soft interior gradient (fake thickness)
+    c += base * float3(1.15, 1.05, 0.95) * (0.18 * saturate(0.7 - rlen));
+    // Rim light / metal edge
+    c += lerp(base, irid, 0.55) * fres * 0.55;
+    c += cool * rim * 0.45;
+    // Specular lobes
+    c += float3(1.0, 0.97, 0.92) * spec * 0.65;
+    c += base * spec2 * 0.25;
+    // Animated anisotropic streak
+    float streak = pow(saturate(1.0 - abs(p.x * 0.9 + sin(p.y * 4.0 + t * 2.0) * 0.08)), 18.0);
+    c += lerp(base, float3(1, 1, 1), 0.5) * streak * 0.2;
+
+    float a = i.col.a * aa;
+    // Keep nearly-opaque centers; avoid full kill on solid quads with UV corners
+    a = max(a, i.col.a * 0.92 * saturate(edge * 20.0 + 0.85));
+    a = min(a, i.col.a);
+    return float4(c, a);
+}
+
 // Soft circular orb / particle (unit quad UV 0..1).
 float4 PSOrb(VSOut i) : SV_Target
 {
+    float t = uTimeRes.x;
     float2 p = i.uv * 2.0 - 1.0;
     float d = length(p);
     float core = saturate(1.0 - d * 1.15);
     float glow = saturate(1.0 - d);
     float a = core * core * core + glow * glow * 0.35;
-    a *= i.col.a;
-    float3 c = i.col.rgb * (0.55 + 0.45 * core);
-    return float4(c, a);
+    // Inner caustic ring
+    float ring = exp(-pow((d - 0.35) * 6.0, 2.0)) * 0.35;
+    a = saturate(a + ring * 0.5) * i.col.a;
+    float3 c = i.col.rgb * (0.45 + 0.55 * core);
+    c += i.col.rgb * ring;
+    c += hsv2rgb(frac(0.6 + t * 0.05 + d * 0.2), 0.5, 1.0) * core * core * 0.25;
+    float tw = 0.85 + 0.15 * sin(t * 8.0 + d * 20.0);
+    return float4(c * tw, a);
 }
 
 // Ring / hollow disc
 float4 PSRing(VSOut i) : SV_Target
 {
+    float t = uTimeRes.x;
     float2 p = i.uv * 2.0 - 1.0;
     float d = length(p);
     float ring = 1.0 - abs(d - 0.72) * 6.0;
     float a = saturate(ring);
     a = a * a * i.col.a;
-    return float4(i.col.rgb, a);
+    float ang = atan2(p.y, p.x);
+    float pulse = 0.75 + 0.25 * sin(ang * 6.0 + t * 3.0);
+    float3 c = i.col.rgb * pulse;
+    c += hsv2rgb(frac(ang / 6.28318 + t * 0.1), 0.6, 1.0) * saturate(ring) * 0.35;
+    return float4(c, a);
 }
 
 float4 PSText(VSOut i) : SV_Target
@@ -243,6 +441,8 @@ public:
 
     if (!CreateDevice(error))
       return false;
+    if (!AllocateGpuMem(error))
+      return false;
     if (!CreateSwapchain(error))
       return false;
     if (!CreatePipeline(error))
@@ -254,6 +454,7 @@ public:
 
   void Shutdown() override
   {
+    gpuMem_.clear();
     rtv_.Reset();
     backbuffer_.Reset();
     swapchain1_.Reset();
@@ -262,12 +463,17 @@ public:
     fontTex_.Reset();
     samp_.Reset();
     vb_.Reset();
+    dynVb_.Reset();
     cb_.Reset();
     layout_.Reset();
     vs_.Reset();
     psSolid_.Reset();
+    psMaterial_.Reset();
     psText_.Reset();
     psBg_.Reset();
+    psFractalA_.Reset();
+    psFractalB_.Reset();
+    psStarfold_.Reset();
     psOrb_.Reset();
     psRing_.Reset();
     blend_.Reset();
@@ -349,6 +555,8 @@ public:
     mode_ = m;
     if (!CreateDevice(error))
       return false;
+    if (!AllocateGpuMem(error))
+      return false;
     if (!CreateSwapchain(error))
       return false;
     if (!CreatePipeline(error))
@@ -402,10 +610,29 @@ public:
     MatOrthoPixels(ortho, static_cast<float>(width_), static_cast<float>(height_));
     const float blendFactor[4] = {0, 0, 0, 0};
 
-    // Backdrop — only Aurora uses the procedural nebula PS.
+    // Backdrop — procedural fullscreen PS when requested.
     const scene::BackdropId bd = sd ? sd->backdrop : scene::BackdropId::Solid;
     bool drewAuroraPs = false;
+    bool drewFxPs = false;
+    ID3D11PixelShader* bgPs = nullptr;
     if (bd == scene::BackdropId::Aurora)
+    {
+      bgPs = psBg_.Get();
+      drewAuroraPs = true;
+    } else if (bd == scene::BackdropId::Starfield)
+    {
+      bgPs = psStarfold_.Get();
+      drewFxPs = true;
+    } else if (bd == scene::BackdropId::FractalA)
+    {
+      bgPs = psFractalA_.Get();
+      drewFxPs = true;
+    } else if (bd == scene::BackdropId::FractalB)
+    {
+      bgPs = psFractalB_.Get();
+      drewFxPs = true;
+    }
+    if (bgPs)
     {
       float scl[16], tr[16], world[16], mvp[16];
       MatScale(scl, static_cast<float>(width_), static_cast<float>(height_));
@@ -413,10 +640,9 @@ public:
       MatMul(world, tr, scl);
       MatMul(mvp, ortho, world);
       ctx_->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
-      ctx_->PSSetShader(psBg_.Get(), nullptr, 0);
+      ctx_->PSSetShader(bgPs, nullptr, 0);
       UpdateCB(mvp, 1, 1, 1, 1);
       ctx_->Draw(6, 0);
-      drewAuroraPs = true;
     }
 
     // Scene primitives
@@ -445,11 +671,11 @@ public:
       scene::PrimCounts pc{};
       if (sd)
         pc = scene::CountPrims(sd->prims);
-      Log("d3d11-draw: scene=%s backdrop=%s auroraPS=%d clear=%.3f,%.3f,%.3f "
+      Log("d3d11-draw: scene=%s backdrop=%s auroraPS=%d fxPS=%d clear=%.3f,%.3f,%.3f "
           "submitted_prims=%d/%d [solid=%d orb=%d ring=%d line=%d tri=%d circle=%d] flashA=%.2f",
           Narrow(info.sceneName ? info.sceneName : L"?").c_str(),
-          Narrow(scene::BackdropIdName(bd)).c_str(), drewAuroraPs ? 1 : 0, clearR, clearG, clearB,
-          drew, pc.total, pc.solid, pc.orb, pc.ring, pc.line, pc.tri, pc.circle,
+          Narrow(scene::BackdropIdName(bd)).c_str(), drewAuroraPs ? 1 : 0, drewFxPs ? 1 : 0, clearR,
+          clearG, clearB, drew, pc.total, pc.solid, pc.orb, pc.ring, pc.line, pc.tri, pc.circle,
           sd ? sd->flashA : 0.f);
     }
 
@@ -478,8 +704,9 @@ public:
         scene::PrimCounts pc{};
         if (sd)
           pc = scene::CountPrims(sd->prims);
-        sprintf_s(line, "draw bg=%s auroraPS=%d n=%d", Narrow(scene::BackdropIdName(bd)).c_str(),
-                  drewAuroraPs ? 1 : 0, drew);
+        sprintf_s(line, "draw bg=%s auroraPS=%d fxPS=%d n=%d",
+                  Narrow(scene::BackdropIdName(bd)).c_str(), drewAuroraPs ? 1 : 0, drewFxPs ? 1 : 0,
+                  drew);
         lines.emplace_back(line);
         sprintf_s(line, "prims s%d o%d r%d l%d t%d", pc.solid, pc.orb, pc.ring, pc.line, pc.tri);
         lines.emplace_back(line);
@@ -750,7 +977,8 @@ private:
 
   bool CreatePipeline(std::wstring* error)
   {
-    ComPtr<ID3DBlob> vsBlob, psSolidBlob, psTextBlob, psBgBlob, psOrbBlob, psRingBlob, errBlob;
+    ComPtr<ID3DBlob> vsBlob, psSolidBlob, psMatBlob, psTextBlob, psBgBlob, psOrbBlob, psRingBlob;
+    ComPtr<ID3DBlob> psFABlob, psFBBlob, psStarBlob, errBlob;
     UINT cflags = D3DCOMPILE_ENABLE_STRICTNESS;
 #if defined(_DEBUG)
     cflags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
@@ -778,9 +1006,17 @@ private:
       return false;
     if (!compile("PSSolid", "ps_4_0", psSolidBlob))
       return false;
+    if (!compile("PSMaterial", "ps_4_0", psMatBlob))
+      return false;
     if (!compile("PSText", "ps_4_0", psTextBlob))
       return false;
     if (!compile("PSBackground", "ps_4_0", psBgBlob))
+      return false;
+    if (!compile("PSFractalA", "ps_4_0", psFABlob))
+      return false;
+    if (!compile("PSFractalB", "ps_4_0", psFBBlob))
+      return false;
+    if (!compile("PSStarfold", "ps_4_0", psStarBlob))
       return false;
     if (!compile("PSOrb", "ps_4_0", psOrbBlob))
       return false;
@@ -801,6 +1037,13 @@ private:
       *error = L"CreatePixelShader solid failed";
       return false;
     }
+    hr = device_->CreatePixelShader(psMatBlob->GetBufferPointer(), psMatBlob->GetBufferSize(),
+                                    nullptr, &psMaterial_);
+    if (FAILED(hr))
+    {
+      *error = L"CreatePixelShader material failed";
+      return false;
+    }
     hr = device_->CreatePixelShader(psTextBlob->GetBufferPointer(), psTextBlob->GetBufferSize(),
                                     nullptr, &psText_);
     if (FAILED(hr))
@@ -813,6 +1056,27 @@ private:
     if (FAILED(hr))
     {
       *error = L"CreatePixelShader bg failed";
+      return false;
+    }
+    hr = device_->CreatePixelShader(psFABlob->GetBufferPointer(), psFABlob->GetBufferSize(),
+                                    nullptr, &psFractalA_);
+    if (FAILED(hr))
+    {
+      *error = L"CreatePixelShader fractalA failed";
+      return false;
+    }
+    hr = device_->CreatePixelShader(psFBBlob->GetBufferPointer(), psFBBlob->GetBufferSize(),
+                                    nullptr, &psFractalB_);
+    if (FAILED(hr))
+    {
+      *error = L"CreatePixelShader fractalB failed";
+      return false;
+    }
+    hr = device_->CreatePixelShader(psStarBlob->GetBufferPointer(), psStarBlob->GetBufferSize(),
+                                    nullptr, &psStarfold_);
+    if (FAILED(hr))
+    {
+      *error = L"CreatePixelShader starfold failed";
       return false;
     }
     hr = device_->CreatePixelShader(psOrbBlob->GetBufferPointer(), psOrbBlob->GetBufferSize(),
@@ -984,7 +1248,7 @@ private:
     return true;
   }
 
-  void UpdateCB(const float* mvp, float r, float g, float b, float a)
+  void UpdateCB(const float* mvp, float r, float g, float b, float a, float matMode = 0.f)
   {
     D3D11_MAPPED_SUBRESOURCE map{};
     const HRESULT hr = ctx_->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
@@ -1002,13 +1266,13 @@ private:
     cb->timeRes[0] = timeSec_;
     cb->timeRes[1] = static_cast<float>(width_);
     cb->timeRes[2] = static_cast<float>(height_);
-    cb->timeRes[3] = 0.f;
+    cb->timeRes[3] = matMode; // 0=quad edge, 1=tri bary (PSMaterial only)
     ctx_->Unmap(cb_.Get(), 0);
     ctx_->VSSetConstantBuffers(0, 1, cb_.GetAddressOf());
     ctx_->PSSetConstantBuffers(0, 1, cb_.GetAddressOf());
   }
 
-  void DrawUnitQuad(const float* mvp, float r, float g, float b, float a)
+  void DrawUnitQuad(const float* mvp, float r, float g, float b, float a, float matMode = 0.f)
   {
     // Re-assert full IA state every draw — HUD path was producing center-screen
     // triangles (identity NDC) when VB/topology got left wrong after dyn draws.
@@ -1018,7 +1282,7 @@ private:
     ctx_->IASetInputLayout(layout_.Get());
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
     ctx_->VSSetShader(vs_.Get(), nullptr, 0);
-    UpdateCB(mvp, r, g, b, a);
+    UpdateCB(mvp, r, g, b, a, matMode);
     ctx_->Draw(6, 0);
   }
 
@@ -1039,12 +1303,12 @@ private:
       break;
     case scene::PrimKind::QuadSolid:
       ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
-      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      ctx_->PSSetShader(psMaterial_.Get(), nullptr, 0);
       DrawTransformed(ortho, p.x, p.y, p.rot, p.w, p.h, p.r, p.g, p.b, p.a);
       break;
     case scene::PrimKind::Line: {
       ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
-      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      ctx_->PSSetShader(psMaterial_.Get(), nullptr, 0);
       const float dx = p.x2 - p.x;
       const float dy = p.y2 - p.y;
       const float len = std::sqrt(dx * dx + dy * dy);
@@ -1059,7 +1323,7 @@ private:
     }
     case scene::PrimKind::Triangle: {
       ctx_->OMSetBlendState(blend_.Get(), blendFactor, 0xFFFFFFFF);
-      ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
+      ctx_->PSSetShader(psMaterial_.Get(), nullptr, 0);
       DrawTriangle(ortho, p);
       break;
     }
@@ -1074,6 +1338,7 @@ private:
   void DrawTriangle(const float* ortho, const scene::Prim& p)
   {
     // Isosceles: tip along +rot (screen +X when rot=0).
+    // UVs = barycentric (tip=1,0,0) so PSMaterial gets soft edges + rim.
     EnsureDynVb();
     const float cs = std::cos(p.rot);
     const float sn = std::sin(p.rot);
@@ -1081,15 +1346,18 @@ private:
     const float halfH = p.h * 0.5f;
     const float lx[3] = {halfH, -halfH, -halfH};
     const float ly[3] = {0.f, -halfB, halfB};
+    // barycentric UV: tip (1,0), baseL (0,1), baseR (0,0) → z=1-x-y
+    const float uu[3] = {1.f, 0.f, 0.f};
+    const float vv[3] = {0.f, 1.f, 0.f};
     Vertex verts[6];
-    auto put = [&](int i, float lx_, float ly_) {
+    auto put = [&](int i, float lx_, float ly_, float u, float v) {
       const float wx = p.x + lx_ * cs - ly_ * sn;
       const float wy = p.y + lx_ * sn + ly_ * cs;
-      verts[i] = {wx, wy, 0.f, 0.f};
+      verts[i] = {wx, wy, u, v};
     };
-    put(0, lx[0], ly[0]);
-    put(1, lx[1], ly[1]);
-    put(2, lx[2], ly[2]);
+    put(0, lx[0], ly[0], uu[0], vv[0]);
+    put(1, lx[1], ly[1], uu[1], vv[1]);
+    put(2, lx[2], ly[2], uu[2], vv[2]);
     // Duplicate as second tri so Draw(6) works if a caller expects quads.
     verts[3] = verts[0];
     verts[4] = verts[2];
@@ -1107,7 +1375,7 @@ private:
 
     float mvp[16];
     std::memcpy(mvp, ortho, sizeof(float) * 16);
-    UpdateCB(mvp, p.r, p.g, p.b, p.a);
+    UpdateCB(mvp, p.r, p.g, p.b, p.a, 1.f); // matMode=1 → bary edge
     ctx_->Draw(3, 0);
 
     // Restore unit VB for subsequent solid/orb/ring draws.
@@ -1278,6 +1546,53 @@ private:
     device_->CreateBuffer(&bd, nullptr, &dynVb_);
   }
 
+  bool AllocateGpuMem(std::wstring* error)
+  {
+    gpuMem_.clear();
+    if (cfg_.gpuMemMb <= 0 || !device_)
+      return true;
+
+    const size_t totalBytes = static_cast<size_t>(cfg_.gpuMemMb) * 1024ull * 1024ull;
+    constexpr size_t kChunk = 64ull * 1024ull * 1024ull; // 64 MiB slabs
+    size_t allocated = 0;
+    while (allocated < totalBytes)
+    {
+      size_t n = totalBytes - allocated;
+      if (n > kChunk)
+        n = kChunk;
+      // CreateBuffer ByteWidth is UINT; keep ≤ 64MiB.
+      n = (n + 255ull) & ~255ull;
+      if (n == 0)
+        break;
+      if (n > 0xFFFFFFFFull)
+      {
+        *error = L"gpu-mem chunk too large";
+        return false;
+      }
+
+      D3D11_BUFFER_DESC bd{};
+      bd.ByteWidth = static_cast<UINT>(n);
+      bd.Usage = D3D11_USAGE_DEFAULT;
+      bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+      ComPtr<ID3D11Buffer> buf;
+      const HRESULT hr = device_->CreateBuffer(&bd, nullptr, &buf);
+      if (FAILED(hr))
+      {
+        Log("d3d11: gpu-mem alloc failed at %zu / %d MB (hr=0x%08X)",
+            allocated / (1024ull * 1024ull), cfg_.gpuMemMb, static_cast<unsigned>(hr));
+        *error = L"GPU memory allocation failed (try a smaller --gpu-mem)";
+        gpuMem_.clear();
+        return false;
+      }
+      gpuMem_.push_back(std::move(buf));
+      allocated += n;
+    }
+
+    Log("d3d11: holding gpu-mem %d MB (%zu buffers, %zu bytes)", cfg_.gpuMemMb, gpuMem_.size(),
+        allocated);
+    return true;
+  }
+
   bool DumpBackbufferBmp(const wchar_t* path)
   {
     if (!device_ || !ctx_ || !backbuffer_ || !path || !*path)
@@ -1406,8 +1721,12 @@ private:
   ComPtr<ID3D11RenderTargetView> rtv_;
   ComPtr<ID3D11VertexShader> vs_;
   ComPtr<ID3D11PixelShader> psSolid_;
+  ComPtr<ID3D11PixelShader> psMaterial_;
   ComPtr<ID3D11PixelShader> psText_;
   ComPtr<ID3D11PixelShader> psBg_;
+  ComPtr<ID3D11PixelShader> psFractalA_;
+  ComPtr<ID3D11PixelShader> psFractalB_;
+  ComPtr<ID3D11PixelShader> psStarfold_;
   ComPtr<ID3D11PixelShader> psOrb_;
   ComPtr<ID3D11PixelShader> psRing_;
   ComPtr<ID3D11InputLayout> layout_;
@@ -1420,6 +1739,7 @@ private:
   ComPtr<ID3D11RasterizerState> raster_;
   ComPtr<ID3D11Texture2D> fontTex_;
   ComPtr<ID3D11ShaderResourceView> fontSrv_;
+  std::vector<ComPtr<ID3D11Buffer>> gpuMem_;
 };
 
 } // namespace
