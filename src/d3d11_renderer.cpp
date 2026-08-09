@@ -27,7 +27,7 @@ cbuffer CB : register(b0)
 {
     float4x4 uTransform;
     float4   uColor;    // rgb + alpha multiplier
-    float4   uTimeRes;  // x=time sec, y=width, z=height, w=unused
+    float4   uTimeRes;  // x=time sec, y=width, z=height, w=matMode (0=quad edge, 1=tri bary)
 };
 
 struct VSIn {
@@ -250,21 +250,24 @@ float4 PSSolid(VSOut i) : SV_Target
 }
 
 // Material fill for scene solids/tris: rim, micro-noise, iridescent sheen, soft AA.
+// uTimeRes.w selects edge metric: 0 = unit-quad UV edge, 1 = barycentric (triangle verts).
 float4 PSMaterial(VSOut i) : SV_Target
 {
     float t = uTimeRes.x;
     float2 uv = i.uv;
     float2 p = uv * 2.0 - 1.0;
 
-    // Barycentric edge if UV encodes bary (x,y,1-x-y); else unit-quad edge.
-    float3 bary = float3(uv.x, uv.y, 1.0 - uv.x - uv.y);
-    bool triLike = (bary.x >= -0.02 && bary.y >= -0.02 && bary.z >= -0.02 &&
-                    (bary.x + bary.y + bary.z) < 1.15 && max(bary.x, max(bary.y, bary.z)) < 0.999);
     float edge;
-    if (triLike && min(bary.x, min(bary.y, bary.z)) < 0.45)
+    if (uTimeRes.w > 0.5)
+    {
+        // Explicit triangle path: UV is barycentric (tip=1,0 / baseL=0,1 / baseR=0,0).
+        float3 bary = float3(uv.x, uv.y, 1.0 - uv.x - uv.y);
         edge = min(bary.x, min(bary.y, bary.z));
-    else
+    } else
+    {
+        // Unit-quad path only — never infer tri from UV (x+y<=1 looks like bary).
         edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    }
 
     float aa = smoothstep(0.0, 0.035, edge);
     float rim = saturate(1.0 - edge * 6.0);
@@ -1245,7 +1248,7 @@ private:
     return true;
   }
 
-  void UpdateCB(const float* mvp, float r, float g, float b, float a)
+  void UpdateCB(const float* mvp, float r, float g, float b, float a, float matMode = 0.f)
   {
     D3D11_MAPPED_SUBRESOURCE map{};
     const HRESULT hr = ctx_->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
@@ -1263,13 +1266,13 @@ private:
     cb->timeRes[0] = timeSec_;
     cb->timeRes[1] = static_cast<float>(width_);
     cb->timeRes[2] = static_cast<float>(height_);
-    cb->timeRes[3] = 0.f;
+    cb->timeRes[3] = matMode; // 0=quad edge, 1=tri bary (PSMaterial only)
     ctx_->Unmap(cb_.Get(), 0);
     ctx_->VSSetConstantBuffers(0, 1, cb_.GetAddressOf());
     ctx_->PSSetConstantBuffers(0, 1, cb_.GetAddressOf());
   }
 
-  void DrawUnitQuad(const float* mvp, float r, float g, float b, float a)
+  void DrawUnitQuad(const float* mvp, float r, float g, float b, float a, float matMode = 0.f)
   {
     // Re-assert full IA state every draw — HUD path was producing center-screen
     // triangles (identity NDC) when VB/topology got left wrong after dyn draws.
@@ -1279,7 +1282,7 @@ private:
     ctx_->IASetInputLayout(layout_.Get());
     ctx_->IASetVertexBuffers(0, 1, vb_.GetAddressOf(), &stride, &offset);
     ctx_->VSSetShader(vs_.Get(), nullptr, 0);
-    UpdateCB(mvp, r, g, b, a);
+    UpdateCB(mvp, r, g, b, a, matMode);
     ctx_->Draw(6, 0);
   }
 
@@ -1372,7 +1375,7 @@ private:
 
     float mvp[16];
     std::memcpy(mvp, ortho, sizeof(float) * 16);
-    UpdateCB(mvp, p.r, p.g, p.b, p.a);
+    UpdateCB(mvp, p.r, p.g, p.b, p.a, 1.f); // matMode=1 → bary edge
     ctx_->Draw(3, 0);
 
     // Restore unit VB for subsequent solid/orb/ring draws.

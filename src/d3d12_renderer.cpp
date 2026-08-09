@@ -49,13 +49,11 @@ float3 hsv2rgb(float h, float s, float v) {
 }
 float4 PSSolid(VSOut i) : SV_Target { return i.col; }
 // Cheap material for scene solids/tris (d3d11 is reference quality).
+// Quad UV edge only — d3d12 approximates tris with unit quads (no bary path).
 float4 PSMaterial(VSOut i) : SV_Target {
   float2 uv = i.uv;
   float2 p = uv * 2 - 1;
   float edge = min(min(uv.x, 1 - uv.x), min(uv.y, 1 - uv.y));
-  float3 bary = float3(uv.x, uv.y, 1 - uv.x - uv.y);
-  if (min(bary.x, min(bary.y, bary.z)) > -0.02 && max(bary.x, max(bary.y, bary.z)) < 0.999)
-    edge = min(edge, min(bary.x, min(bary.y, bary.z)));
   float rim = saturate(1 - edge * 5);
   float n = frac(sin(dot(uv * 40 + uTimeRes.x * 0.1, float2(12.9, 78.2))) * 43758.5);
   float3 c = i.col.rgb * (0.55 + 0.25 * (1 - length(p)) + 0.1 * n);
@@ -177,6 +175,7 @@ public:
     for (auto& a : cmdAlloc_)
       a.Reset();
     pipelineSolid_.Reset();
+    pipelineMaterial_.Reset();
     pipelineText_.Reset();
     rootSig_.Reset();
     vb_.Reset();
@@ -328,15 +327,16 @@ public:
 
       if (sd->flashA > 0.001f)
       {
+        // Flat solid — not material (uniform flash).
         DrawSolidXform(fi, ortho, width_ * 0.5f, height_ * 0.5f, 0.f, float(width_), float(height_),
-                       sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.45f);
+                       sd->flashR, sd->flashG, sd->flashB, sd->flashA * 0.45f, false);
       }
     } else
     {
       // Fallback motion if scene missing
       const float t = static_cast<float>(info.elapsedSec);
       const float cx = width_ * 0.5f, cy = height_ * 0.5f;
-      DrawSolidXform(fi, ortho, cx, cy, t * 2.2f, 90.f, 90.f, 0.8f, 0.5f, 0.9f, 1.f);
+      DrawSolidXform(fi, ortho, cx, cy, t * 2.2f, 90.f, 90.f, 0.8f, 0.5f, 0.9f, 1.f, true);
     }
 
     if (!info.noHud)
@@ -542,7 +542,7 @@ private:
 
   bool CreatePipeline(std::wstring* error)
   {
-    ComPtr<ID3DBlob> vs, psSolid, psText, err;
+    ComPtr<ID3DBlob> vs, psSolid, psMat, psText, err;
     auto compile = [&](const char* entry, const char* target, ComPtr<ID3DBlob>& out) -> bool {
       err.Reset();
       HRESULT hr = D3DCompile(kShaderSrc, sizeof(kShaderSrc), "d3d12.hlsl", nullptr, nullptr, entry,
@@ -560,8 +560,9 @@ private:
     };
     if (!compile("VSMain", "vs_5_0", vs))
       return false;
-    // Scene solids use material PS (HUD still readable).
-    if (!compile("PSMaterial", "ps_5_0", psSolid))
+    if (!compile("PSSolid", "ps_5_0", psSolid))
+      return false;
+    if (!compile("PSMaterial", "ps_5_0", psMat))
       return false;
     if (!compile("PSText", "ps_5_0", psText))
       return false;
@@ -652,6 +653,8 @@ private:
       return true;
     };
     if (!makePso(psSolid.Get(), false, pipelineSolid_))
+      return false;
+    if (!makePso(psMat.Get(), true, pipelineMaterial_))
       return false;
     if (!makePso(psText.Get(), true, pipelineText_))
       return false;
@@ -840,7 +843,7 @@ private:
   }
 
   void DrawSolidXform(UINT fi, const float* ortho, float x, float y, float rot, float sx, float sy,
-                      float r, float g, float b, float a)
+                      float r, float g, float b, float a, bool material = true)
   {
     if (cbSlot_ >= kMaxCbSlots)
       return;
@@ -853,7 +856,7 @@ private:
     MatMul(mvp, ortho, world);
     const UINT slot = cbSlot_++;
     SetCBSlot(fi, slot, mvp, r, g, b, a);
-    cmdList_->SetPipelineState(pipelineSolid_.Get());
+    cmdList_->SetPipelineState(material ? pipelineMaterial_.Get() : pipelineSolid_.Get());
     cmdList_->SetGraphicsRootConstantBufferView(0, cbGpu_[fi] + slot * 256);
     cmdList_->DrawInstanced(6, 1, 0, 0);
   }
@@ -878,7 +881,7 @@ private:
         w *= 0.85f;
         h *= 0.85f;
       }
-      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, w, h, p.r, p.g, p.b, p.a);
+      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, w, h, p.r, p.g, p.b, p.a, true);
       break;
     }
     case scene::PrimKind::Line: {
@@ -890,12 +893,12 @@ private:
       const float ang = std::atan2(dy, dx);
       const float thick = p.w > 0.5f ? p.w : 2.f;
       DrawSolidXform(fi, ortho, (p.x + p.x2) * 0.5f, (p.y + p.y2) * 0.5f, ang, len, thick, p.r, p.g,
-                     p.b, p.a);
+                     p.b, p.a, true);
       break;
     }
     case scene::PrimKind::Triangle:
       // Approx triangle as rotated diamond/rect (good enough for freeze-tell on d3d12).
-      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, p.h, p.w * 0.65f, p.r, p.g, p.b, p.a);
+      DrawSolidXform(fi, ortho, p.x, p.y, p.rot, p.h, p.w * 0.65f, p.r, p.g, p.b, p.a, true);
       break;
     }
   }
@@ -1019,6 +1022,7 @@ private:
   ComPtr<ID3D12Fence> fence_;
   ComPtr<ID3D12RootSignature> rootSig_;
   ComPtr<ID3D12PipelineState> pipelineSolid_;
+  ComPtr<ID3D12PipelineState> pipelineMaterial_;
   ComPtr<ID3D12PipelineState> pipelineText_;
   ComPtr<ID3D12Resource> vb_;
   ComPtr<ID3D12Resource> cb_[kFrameCount];

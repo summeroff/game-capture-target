@@ -86,7 +86,8 @@ Invoke-Smoke -Label "d3d11 scene orbital" -ArgList @(
 
 Invoke-Smoke -Label "d3d11 scene fractal" -ArgList @(
   "--api", "d3d11", "--scene", "fractal", "--scene-seed", "0",
-  "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
+  # Tiny viewport: heavy raymarch is path-covered without WARP multi-minute stalls.
+  "--exit-after", "$Seconds", "--width", "160", "--height", "90", "--vsync", "0"
 ) | Out-Null
 
 Invoke-Smoke -Label "d3d11 gpu-mem 100" -ArgList @(
