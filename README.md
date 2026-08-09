@@ -130,6 +130,7 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--block-capture` | none | none \| signature-policy \| squat-ipc \| unload-hook |
 | `--block-capture-after` | 0 | seconds |
 | `--show-block-errors` | off | allow Windows loader hard-error dialogs |
+| `--version` / `-V` | — | print version (`X.Y.Z+gSHA` or `0.0.0-dev+gSHA`) and exit |
 
 ## Scenes (visual stress patterns)
 
@@ -188,13 +189,14 @@ OBS/Streamlabs UI checks (warning text, blank preview, F7 restore) need a human 
 
 ## CI / code style
 
-GitHub Actions (`.github/workflows/ci.yml`) on push/PR to `master`:
+GitHub Actions (`.github/workflows/ci.yml`) on push/PR to `master`, and on tags `v*`:
 
 | Job | What |
 |-----|------|
 | **Format** | Ubuntu + pinned `clang-format-18` via `scripts/format.sh --check` |
-| **Build & smoke (x64)** | VS 2022 Release + `scripts/ci-smoke.ps1` (help, profiles JSON, d3d11/d3d12/none, flip-model 0, squat-ipc, cs2 profile; vulkan optional) |
+| **Build & smoke (x64)** | VS 2022 Release + `scripts/ci-smoke.ps1` (help, `--version`, profiles JSON, d3d11/d3d12/none, flip-model 0, squat-ipc, cs2 profile; vulkan optional) |
 | **Build (Win32)** | x86 Release + short d3d11/none smoke |
+| **GitHub Release** | on `v*` tags only — attaches `fakegame-vX.Y.Z-win-x64.zip` + `…-win-x86.zip` |
 
 Brace style is **Allman** (`{` / `}` on their own line) with **`} else {`** / **`} else if`** allowed joined. See `CODING_STYLE.md` and `.clang-format`.
 
@@ -206,10 +208,40 @@ scripts\ci-smoke.ps1
 
 Workflow for changes: feature branch → PR → leave open for Copilot/human review (do not auto-merge).
 
+## Releases (version tags)
+
+Version is **injected from the git tag** at configure time. Local/PR builds stay `0.0.0-dev+g<sha>` — there is no per-release CMake bump commit.
+
+| Build | Version string | PE `FILEVERSION` |
+|-------|----------------|------------------|
+| Local / PR / untagged CI | `0.0.0-dev+g…` | `0.0.0.0` |
+| Tag `v1.0.0` | `1.0.0+g…` | `1.0.0.0` |
+| Tag `v1.0.0-b1` (prerelease) | `1.0.0-b1+g…` | `1.0.0.0` |
+
+Cut a release from updated `master`:
+
+```bash
+git checkout master && git pull
+git tag -a v1.0.0 -m "v1.0.0 — summary"
+git push origin v1.0.0
+# CI builds, smokes, and publishes a GitHub Release with x64 + x86 zips
+```
+
+Beta / prerelease: use a SemVer hyphen (`v1.0.0-b1`, not `v1.0.0b1`). CI marks the GitHub Release as prerelease when the version contains `-`.
+
+Optional local tag sim:
+
+```bat
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DFG_RELEASE_VERSION=1.0.0
+cmake --build build --config Release
+build\bin\fakegame.exe --version
+```
+
 ## Layout
 
 ```
 CMakeLists.txt
+cmake/version_build.h.in
 PROMPT.md
 README.md
 CODING_STYLE.md

@@ -62,6 +62,7 @@ struct Config
   bool listProfilesJson = false;
   bool listScenes = false;
   bool help = false;
+  bool version = false;
 };
 
 // Parse argv. Flags override --config and --profile.
@@ -73,3 +74,4 @@ WindowMode NextWindowMode(WindowMode m);
 
 void PrintConfig(const Config& c);
 void PrintHelp();
+void PrintVersion();

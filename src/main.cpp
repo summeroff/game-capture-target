@@ -39,6 +39,12 @@ int wmain(int argc, wchar_t** argv)
     return 0;
   }
 
+  if (cfg.version)
+  {
+    PrintVersion();
+    return 0;
+  }
+
   if (cfg.listProfiles)
   {
     if (cfg.listProfilesJson)
