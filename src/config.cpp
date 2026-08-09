@@ -476,7 +476,7 @@ Options:
   --block-capture <mode>    none | signature-policy | squat-ipc | unload-hook
   --block-capture-after <s> Delay before applying block (0 = immediate)
   --show-block-errors       Do not suppress Windows loader hard-error dialogs
-  --version                 Print version string and exit
+  --version / -V            Print version string and exit
   --help                    This help
 
 Scenes:

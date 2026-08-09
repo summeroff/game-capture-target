@@ -49,8 +49,10 @@ if(GIT_FOUND)
 endif()
 
 # Display / log string: always append +gHASH (from git at configure time).
-# Pass bare versions only: 0.0.0-dev or X.Y.Z — do not include +g… in FG_RELEASE_VERSION.
+# Prefer bare versions: 0.0.0-dev or X.Y.Z — do not include +g… in FG_RELEASE_VERSION.
+# Leading v/V is stripped so -DFG_RELEASE_VERSION=v1.2.3 matches PE numerics and scripts.
 set(_fg_base "${FG_RELEASE_VERSION}")
+string(REGEX REPLACE "^[vV]" "" _fg_base "${_fg_base}")
 string(REGEX REPLACE "\\+g[0-9a-fA-F]+(\\.dirty)?$" "" _fg_base "${_fg_base}")
 string(REGEX REPLACE "\\.dirty$" "" _fg_base "${_fg_base}")
 set(FG_VERSION_STRING "${_fg_base}+g${FG_GIT_HASH}")
