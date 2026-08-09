@@ -2,6 +2,7 @@
 
 #include "log.hpp"
 #include "profiles.hpp"
+#include "version_build.h"
 
 #include <cstdio>
 #include <fstream>
@@ -413,6 +414,8 @@ WindowMode NextWindowMode(WindowMode m)
 void PrintConfig(const Config& c)
 {
   Log("=== resolved config ===");
+  Log("  version     = %s", FG_VERSION_STRING);
+  Log("  git         = %s dirty=%d", FG_GIT_HASH, FG_GIT_DIRTY);
   if (!c.profileId.empty())
     Log("  profile     = %s", c.profileId.c_str());
   if (!c.profileExeName.empty())
@@ -473,6 +476,7 @@ Options:
   --block-capture <mode>    none | signature-policy | squat-ipc | unload-hook
   --block-capture-after <s> Delay before applying block (0 = immediate)
   --show-block-errors       Do not suppress Windows loader hard-error dialogs
+  --version / -V            Print version string and exit
   --help                    This help
 
 Scenes:
@@ -507,12 +511,18 @@ Use tools\launch.ps1 or tools\spawn-as.ps1 to copy+launch as cs2.exe etc.
 )");
 }
 
+void PrintVersion()
+{
+  // Single line for scripts: bare version+ghash[.dirty]
+  std::printf("%s\n", FG_VERSION_STRING);
+}
+
 bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
 {
   Config c;
   FlagSeen seen;
 
-  // Pass 1: --config, --list-profiles, --list-scenes, --help, --profile id (store only)
+  // Pass 1: --config, --list-profiles, --list-scenes, --help, --version, --profile id
   std::wstring configPath;
   std::wstring profileId;
   for (int i = 1; i < argc; ++i)
@@ -542,6 +552,9 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     } else if (EqI(argv[i], L"--json"))
     {
       c.listProfilesJson = true;
+    } else if (EqI(argv[i], L"--version") || EqI(argv[i], L"-V"))
+    {
+      c.version = true;
     } else if (EqI(argv[i], L"--help") || EqI(argv[i], L"-h") || EqI(argv[i], L"/?"))
     {
       c.help = true;
@@ -549,6 +562,11 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
   }
 
   if (c.help)
+  {
+    *out = std::move(c);
+    return true;
+  }
+  if (c.version)
   {
     *out = std::move(c);
     return true;
@@ -591,7 +609,8 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
       continue;
     }
     if (EqI(a, L"--list-profiles") || EqI(a, L"--list-scenes") || EqI(a, L"--json") ||
-        EqI(a, L"--help") || EqI(a, L"-h") || EqI(a, L"/?"))
+        EqI(a, L"--version") || EqI(a, L"-V") || EqI(a, L"--help") || EqI(a, L"-h") ||
+        EqI(a, L"/?"))
     {
       continue;
     }

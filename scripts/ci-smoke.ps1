@@ -53,6 +53,20 @@ function Invoke-Smoke {
 
 # Pure CLI (no window loop)
 Invoke-Smoke -Label "help" -ArgList @("--help") | Out-Null
+Invoke-Smoke -Label "version" -ArgList @("--version") | Out-Null
+Write-Host ""
+Write-Host "=== version string ===" -ForegroundColor Cyan
+$verOut = & $Exe --version
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "--version exit=$LASTEXITCODE"
+  exit 1
+}
+$verLine = if ($verOut -is [array]) { $verOut[0] } else { [string]$verOut }
+Write-Host "version=$verLine"
+if ($verLine -notmatch '^\d+\.\d+\.\d+') {
+  Write-Error "--version output does not start with X.Y.Z: '$verLine'"
+  exit 1
+}
 Invoke-Smoke -Label "list-profiles" -ArgList @("--list-profiles") | Out-Null
 Invoke-Smoke -Label "list-scenes" -ArgList @("--list-scenes") | Out-Null
 Invoke-Smoke -Label "bad scene" -ArgList @("--scene", "nope") -ExpectExit 2 | Out-Null

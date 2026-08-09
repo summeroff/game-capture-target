@@ -1,9 +1,13 @@
-# Build, format-check, and smoke-test fakegame on Windows.
+# Build, format-check, smoke-test, and (on version tags) publish GitHub Releases.
 #
 # Jobs:
-#   format — clang-format dry-run (Allman braces; "} else {" allowed)
-#   build  — VS 2022 Release x64 + scripts/ci-smoke.ps1
-#            optional Win32 (x86) build (no full smoke — inject path compile gate)
+#   format    — clang-format dry-run (Allman braces; "} else {" allowed)
+#   build     — VS 2022 Release x64 + scripts/ci-smoke.ps1
+#   build-x86 — VS 2022 Release Win32 + short d3d11/none smoke
+#   release   — on tags v*: zip artifacts → GitHub Release
+#
+# Version: local/PR/untagged CI → CMake default 0.0.0-dev.
+#          tag vX.Y.Z → -DFG_RELEASE_VERSION=X.Y.Z (no leading v).
 #
 # Runner: windows-2022 (not windows-latest) for -G "Visual Studio 17 2022".
 
@@ -12,6 +16,7 @@ name: CI
 on:
   push:
     branches: [master, main]
+    tags: ["v*"]
   pull_request:
     branches: [master, main]
 
@@ -39,6 +44,7 @@ jobs:
           chmod +x scripts/format.sh
           ./scripts/format.sh --check
           clang-format-18 --version
+
   build:
     name: Build & smoke (Windows x64)
     needs: format
@@ -48,8 +54,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve release version
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = $env:GITHUB_REF
+          if ($ref -match '^refs/tags/v(.+)$') {
+            $v = $Matches[1]
+            Write-Host "Tagged release version: $v"
+            "version=$v" >> $env:GITHUB_OUTPUT
+            "is_release=true" >> $env:GITHUB_OUTPUT
+            # SemVer pre-release (1.0.0-b1, 1.0.0-beta.1, …) → GitHub prerelease
+            $pre = $v -match '-'
+            "prerelease=$($pre.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+            Write-Host "prerelease=$pre"
+          } else {
+            Write-Host "Non-tag build — CMake default 0.0.0-dev"
+            "version=" >> $env:GITHUB_OUTPUT
+            "is_release=false" >> $env:GITHUB_OUTPUT
+            "prerelease=false" >> $env:GITHUB_OUTPUT
+          }
+
       - name: Configure (VS 2022 x64)
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        shell: pwsh
+        run: |
+          $args = @('-S', '.', '-B', 'build', '-G', 'Visual Studio 17 2022', '-A', 'x64')
+          if ('${{ steps.ver.outputs.is_release }}' -eq 'true') {
+            $args += "-DFG_RELEASE_VERSION=${{ steps.ver.outputs.version }}"
+          }
+          Write-Host "cmake $($args -join ' ')"
+          & cmake @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Release
         run: cmake --build build --config Release --parallel
@@ -58,6 +93,29 @@ jobs:
         shell: pwsh
         run: |
           .\scripts\ci-smoke.ps1 -Exe (Resolve-Path .\build\bin\fakegame.exe).Path -Seconds 2
+
+      - name: Verify PE version (tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path .\build\bin\fakegame.exe).Path
+          $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+          $want = "${{ steps.ver.outputs.version }}"
+          # ProductVersion is the full string (may include +gHASH); FileVersion PE is X.Y.Z.0
+          Write-Host "FileVersion=$($info.FileVersion)"
+          Write-Host "ProductVersion=$($info.ProductVersion)"
+          Write-Host "FileMajorPart=$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart)"
+          if ($info.ProductVersion -notlike "$want*") {
+            Write-Error "ProductVersion '$($info.ProductVersion)' does not start with tag version '$want'"
+            exit 1
+          }
+          $verOut = & $exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "--version => $verOut"
+          if ("$verOut" -notlike "$want*") {
+            Write-Error "--version '$verOut' does not start with '$want'"
+            exit 1
+          }
 
       - name: Upload Release artifact
         if: github.event_name != 'pull_request'
@@ -69,6 +127,33 @@ jobs:
             build/bin/*.pdb
           if-no-files-found: error
           retention-days: 14
+
+      - name: Package release zip (x64)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $name = "fakegame-$tag-win-x64"
+          $dir = "dist/$name"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item "build/bin/fakegame.exe" "$dir/"
+          if (Test-Path "build/bin/fakegame.pdb") {
+            Copy-Item "build/bin/fakegame.pdb" "$dir/"
+          }
+          if (Test-Path "README.md") { Copy-Item "README.md" "$dir/" }
+          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$dir/" }
+          Compress-Archive -Path "$dir/*" -DestinationPath "$name.zip" -Force
+          Get-Item "$name.zip" | Format-List Name, Length, FullName
+
+      - name: Upload release zip artifact (x64)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-zip-win-x64
+          path: fakegame-*-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
   build-x86:
     name: Build (Windows Win32)
     needs: format
@@ -78,8 +163,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve release version
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = $env:GITHUB_REF
+          if ($ref -match '^refs/tags/v(.+)$') {
+            $v = $Matches[1]
+            Write-Host "Tagged release version: $v"
+            "version=$v" >> $env:GITHUB_OUTPUT
+            "is_release=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "Non-tag build — CMake default 0.0.0-dev"
+            "version=" >> $env:GITHUB_OUTPUT
+            "is_release=false" >> $env:GITHUB_OUTPUT
+          }
+
       - name: Configure (VS 2022 Win32)
-        run: cmake -S . -B build-x86 -G "Visual Studio 17 2022" -A Win32
+        shell: pwsh
+        run: |
+          $args = @('-S', '.', '-B', 'build-x86', '-G', 'Visual Studio 17 2022', '-A', 'Win32')
+          if ('${{ steps.ver.outputs.is_release }}' -eq 'true') {
+            $args += "-DFG_RELEASE_VERSION=${{ steps.ver.outputs.version }}"
+          }
+          Write-Host "cmake $($args -join ' ')"
+          & cmake @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Release x86
         run: cmake --build build-x86 --config Release --parallel
@@ -90,8 +199,87 @@ jobs:
           $exe = (Resolve-Path .\build-x86\bin\fakegame.exe).Path
           & $exe --list-profiles --json | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $exe --api d3d11 --exit-after 2 --width 640 --height 360 --vsync 0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $exe --api none --exit-after 2 --width 640 --height 360
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "x86 smoke OK"
+
+      - name: Package release zip (x86)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $name = "fakegame-$tag-win-x86"
+          $dir = "dist/$name"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item "build-x86/bin/fakegame.exe" "$dir/"
+          if (Test-Path "build-x86/bin/fakegame.pdb") {
+            Copy-Item "build-x86/bin/fakegame.pdb" "$dir/"
+          }
+          if (Test-Path "README.md") { Copy-Item "README.md" "$dir/" }
+          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$dir/" }
+          Compress-Archive -Path "$dir/*" -DestinationPath "$name.zip" -Force
+          Get-Item "$name.zip" | Format-List Name, Length, FullName
+
+      - name: Upload release zip artifact (x86)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-zip-win-x86
+          path: fakegame-*-win-x86.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, build-x86]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve release version
+        id: ver
+        shell: bash
+        run: |
+          ref="${GITHUB_REF}"
+          if [[ "$ref" =~ ^refs/tags/v(.+)$ ]]; then
+            v="${BASH_REMATCH[1]}"
+            echo "version=$v" >> "$GITHUB_OUTPUT"
+            if [[ "$v" == *-* ]]; then
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "Tagged release version: $v"
+          else
+            echo "Not a version tag" >&2
+            exit 1
+          fi
+
+      - name: Download release zips
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-zip-win-*
+          merge-multiple: true
+          path: dist
+
+      - name: List assets
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: game-capture-target ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          files: |
+            dist/fakegame-*-win-x64.zip
+            dist/fakegame-*-win-x86.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,3 +1,33 @@
 #include "resource.h"
+#include "version_build.h"
 
 IDI_APPICON ICON "fakegame.ico"
+
+1 VERSIONINFO
+FILEVERSION    FG_VERSION_MAJOR,FG_VERSION_MINOR,FG_VERSION_PATCH,0
+PRODUCTVERSION FG_VERSION_MAJOR,FG_VERSION_MINOR,FG_VERSION_PATCH,0
+FILEFLAGSMASK  0x3fL
+FILEFLAGS      0x0L
+FILEOS         0x40004L
+FILETYPE       0x1L
+FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "summeroff"
+            VALUE "FileDescription",  "OBS / Streamlabs game capture test target"
+            VALUE "FileVersion",      FG_VERSION_STRING
+            VALUE "InternalName",     "fakegame"
+            VALUE "LegalCopyright",   "MIT"
+            VALUE "OriginalFilename", "fakegame.exe"
+            VALUE "ProductName",      "game-capture-target"
+            VALUE "ProductVersion",   FG_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

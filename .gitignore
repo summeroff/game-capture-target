@@ -1,6 +1,7 @@
 build/
 build-x86/
 build-ci/
+build-rel/
 out/
 .vs/
 .hermes/

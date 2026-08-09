@@ -1,9 +1,84 @@
 cmake_minimum_required(VERSION 3.20)
-project(fakegame LANGUAGES CXX)
+
+# Single version knob. Local/PR builds stay on the default so a Debug/Release exe
+# is never mistaken for a GitHub Release. CI tag builds pass e.g.
+# -DFG_RELEASE_VERSION=1.0.0 (tag v1.0.0 without the leading v).
+set(FG_RELEASE_VERSION "0.0.0-dev" CACHE STRING
+    "App version string (CI sets from git tag; local default is 0.0.0-dev)")
+
+# Numeric PE/FILEVERSION fields: take leading X.Y.Z; ignore -dev / -b1 / +meta.
+set(_fg_ver "${FG_RELEASE_VERSION}")
+string(REGEX REPLACE "^[vV]" "" _fg_ver "${_fg_ver}")
+if(_fg_ver MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+  set(FG_VERSION_MAJOR "${CMAKE_MATCH_1}")
+  set(FG_VERSION_MINOR "${CMAKE_MATCH_2}")
+  set(FG_VERSION_PATCH "${CMAKE_MATCH_3}")
+else()
+  set(FG_VERSION_MAJOR 0)
+  set(FG_VERSION_MINOR 0)
+  set(FG_VERSION_PATCH 0)
+endif()
+
+# Short git identity for logs (especially 0.0.0-dev builds).
+set(FG_GIT_HASH "unknown")
+set(FG_GIT_DIRTY 0)
+find_package(Git QUIET)
+if(GIT_FOUND)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" rev-parse --short=12 HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE _fg_git_hash
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE _fg_git_hash_rc
+  )
+  if(_fg_git_hash_rc EQUAL 0 AND NOT _fg_git_hash STREQUAL "")
+    set(FG_GIT_HASH "${_fg_git_hash}")
+  endif()
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" status --porcelain
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE _fg_git_status
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE _fg_git_status_rc
+  )
+  if(_fg_git_status_rc EQUAL 0 AND NOT _fg_git_status STREQUAL "")
+    set(FG_GIT_DIRTY 1)
+  endif()
+endif()
+
+# Display / log string: always append +gHASH (from git at configure time).
+# Prefer bare versions: 0.0.0-dev or X.Y.Z — do not include +g… in FG_RELEASE_VERSION.
+# Leading v/V is stripped so -DFG_RELEASE_VERSION=v1.2.3 matches PE numerics and scripts.
+set(_fg_base "${FG_RELEASE_VERSION}")
+string(REGEX REPLACE "^[vV]" "" _fg_base "${_fg_base}")
+string(REGEX REPLACE "\\+g[0-9a-fA-F]+(\\.dirty)?$" "" _fg_base "${_fg_base}")
+string(REGEX REPLACE "\\.dirty$" "" _fg_base "${_fg_base}")
+set(FG_VERSION_STRING "${_fg_base}+g${FG_GIT_HASH}")
+if(FG_GIT_DIRTY)
+  set(FG_VERSION_STRING "${FG_VERSION_STRING}.dirty")
+endif()
+
+project(fakegame
+  VERSION ${FG_VERSION_MAJOR}.${FG_VERSION_MINOR}.${FG_VERSION_PATCH}
+  LANGUAGES CXX RC
+)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(FG_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${FG_GENERATED_DIR}")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version_build.h.in"
+  "${FG_GENERATED_DIR}/version_build.h"
+  @ONLY
+)
+message(STATUS "fakegame version: ${FG_VERSION_STRING} "
+  "(PE ${FG_VERSION_MAJOR}.${FG_VERSION_MINOR}.${FG_VERSION_PATCH}, "
+  "git ${FG_GIT_HASH}, dirty=${FG_GIT_DIRTY})")
 
 # Static CRT — renamed/relocated copy must not need VCRUNTIME*.dll
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -26,7 +101,11 @@ add_executable(fakegame
   resources/app.rc
 )
 
-target_include_directories(fakegame PRIVATE src resources)
+target_include_directories(fakegame PRIVATE
+  src
+  resources
+  "${FG_GENERATED_DIR}"
+)
 
 target_compile_definitions(fakegame PRIVATE
   UNICODE
