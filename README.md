@@ -119,9 +119,11 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--exit-after` | 0 | |
 | `--topmost` | off | |
 | `--no-hud` | off | |
-| `--scene <name>` | `aurora` | `aurora` \| `orbital` \| `highway` (more later) |
-| `--scene-seed <u32>` | `0xC5A2EE` | Deterministic scene RNG |
+| `--scene <name>` | `aurora` | `aurora` \| `orbital` \| `highway` \| `fractal` |
+| `--scene-seed <u32>` | `0xC5A2EE` | Deterministic scene RNG; fractal even=A / odd=B |
 | `--list-scenes` | — | Scene table |
+| `--dump-frame <path.bmp>` | — | d3d11: one framebuffer BMP after a few frames |
+| `--gpu-mem <size>` | off | Hold GPU RAM: `100`/`500`/`1024`/`2048` or `100mb`/`500mb`/`1gb`/`2gb` |
 | `--config <path>` | — | INI; flags override |
 | `--profile <name>` | — | |
 | `--list-profiles` | — | table or with `--json` |
@@ -135,9 +137,14 @@ Shared CPU scene → draw-list; d3d11 is reference quality, d3d12/GDI approximat
 
 | `--scene` | What you see | Best for |
 |-----------|--------------|----------|
-| `aurora` (default) | Nebula, orb rings, comet, EQ bars | General freeze tell |
-| `orbital` | Drones vs asteroids, explosions, flash | Particles, alpha, tiny sprites, HUD |
+| `aurora` (default) | Nebula, soft orbs, comet, EQ bars | General freeze tell |
+| `orbital` | Starfold backdrop, drones, asteroids, flash | Particles, alpha, tiny sprites, HUD |
 | `highway` | Night neon highway, perspective road, traffic, speedo | Aspect ratio, resize, clipping, motion blur tell |
+| `fractal` | Fullscreen twigl-style raymarch (+ orbiting material tris) | GPU fill-rate / heavy PS stress |
+
+d3d11 is the reference path: scene solids/triangles use a **material** pixel shader (rim, sheen, soft edges);
+`fractal` / starfield backdrops are multi-iteration raymarch/fold shaders. d3d12 gets a lighter material PS;
+GDI approximates motion only.
 
 `--scene-seed <u32>` makes scene spawns/motion reproducible across runs.
 

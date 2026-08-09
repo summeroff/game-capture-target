@@ -11,6 +11,7 @@ namespace scene
 std::unique_ptr<IScene> CreateAuroraScene();
 std::unique_ptr<IScene> CreateOrbitalScene();
 std::unique_ptr<IScene> CreateHighwayScene();
+std::unique_ptr<IScene> CreateFractalScene();
 
 const wchar_t* SceneIdName(SceneId id)
 {
@@ -22,6 +23,8 @@ const wchar_t* SceneIdName(SceneId id)
     return L"orbital";
   case SceneId::Highway:
     return L"highway";
+  case SceneId::Fractal:
+    return L"fractal";
   }
   return L"?";
 }
@@ -36,6 +39,10 @@ const wchar_t* BackdropIdName(BackdropId id)
     return L"aurora-ps";
   case BackdropId::Starfield:
     return L"starfield";
+  case BackdropId::FractalA:
+    return L"fractal-a";
+  case BackdropId::FractalB:
+    return L"fractal-b";
   }
   return L"?";
 }
@@ -108,6 +115,11 @@ bool ParseSceneId(const std::wstring& s, SceneId* out)
     *out = SceneId::Highway;
     return true;
   }
+  if (_wcsicmp(s.c_str(), L"fractal") == 0 || _wcsicmp(s.c_str(), L"raymarch") == 0)
+  {
+    *out = SceneId::Fractal;
+    return true;
+  }
   return false;
 }
 
@@ -121,6 +133,8 @@ std::unique_ptr<IScene> CreateScene(SceneId id)
     return CreateOrbitalScene();
   case SceneId::Highway:
     return CreateHighwayScene();
+  case SceneId::Fractal:
+    return CreateFractalScene();
   }
   return CreateAuroraScene();
 }
@@ -131,6 +145,7 @@ void PrintSceneList()
   std::printf("  aurora   Nebula backdrop, orb rings, comet, EQ bars (default)\n");
   std::printf("  orbital  Starfield defense: drones, asteroids, explosions, flash\n");
   std::printf("  highway  Night neon highway: perspective road, traffic, speedo\n");
+  std::printf("  fractal  Twigl-style raymarch backdrop (seed even=A tunnel, odd=B spiral)\n");
   std::printf("\nUpcoming: skirmish, sonar\n");
   std::printf("Flags: --scene <name>  --scene-seed <u32>  --list-scenes\n");
 }

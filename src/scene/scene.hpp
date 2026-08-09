@@ -13,14 +13,17 @@ enum class SceneId
   Aurora = 0,
   Orbital,
   Highway,
+  Fractal, // fullscreen twigl-style raymarch stress (d3d11 reference)
   // Skirmish, Sonar — later
 };
 
 enum class BackdropId
 {
   Solid = 0, // clear to solid color
-  Aurora,    // d3d11 procedural PS; others approximate
-  Starfield, // dark space + CPU stars in draw list
+  Aurora,    // d3d11 procedural nebula PS; others approximate
+  Starfield, // dark space + GPU starfold PS (d3d11) / CPU stars
+  FractalA,  // twigl-style log-space tunnel raymarch (heavy)
+  FractalB,  // twigl-style spiral raymarch (heavy)
 };
 
 // Immediate-mode primitives in pixel space (top-left origin, Y down).

@@ -89,19 +89,27 @@ public:
     FillRect(mem, &rc, bg);
     DeleteObject(bg);
 
-    // Cheap aurora bands when backdrop requests it (no shader).
-    if (sd && sd->backdrop == scene::BackdropId::Aurora)
+    // Cheap aurora / fractal bands when backdrop requests it (no shader).
+    if (sd &&
+        (sd->backdrop == scene::BackdropId::Aurora || sd->backdrop == scene::BackdropId::FractalA ||
+         sd->backdrop == scene::BackdropId::FractalB ||
+         sd->backdrop == scene::BackdropId::Starfield))
     {
       const float t = static_cast<float>(info.elapsedSec);
-      for (int y = 0; y < h; y += 3)
+      const bool fractal = sd->backdrop == scene::BackdropId::FractalA ||
+                           sd->backdrop == scene::BackdropId::FractalB;
+      for (int y = 0; y < h; y += fractal ? 2 : 3)
       {
         const float ny = (y / float(h)) * 2.f - 1.f;
         const float wave = std::sin(t * 0.9f + y * 0.02f) * 0.3f;
         const float band = std::exp(-(ny + wave) * (ny + wave) * 4.f);
         if (band < 0.05f)
           continue;
-        const int a = int(band * 90);
-        HPEN pen = CreatePen(PS_SOLID, 3, RGB(int(20 + a * 0.4f), int(80 + a * 1.2f), int(60 + a)));
+        const int a = int(band * (fractal ? 140 : 90));
+        const int rr = fractal ? int(40 + a * 1.5f) : int(20 + a * 0.4f);
+        const int gg = fractal ? int(20 + a * 0.6f) : int(80 + a * 1.2f);
+        const int bb = fractal ? int(80 + a) : int(60 + a);
+        HPEN pen = CreatePen(PS_SOLID, fractal ? 2 : 3, RGB(rr, gg, bb));
         HGDIOBJ op = SelectObject(mem, pen);
         MoveToEx(mem, 0, y, nullptr);
         LineTo(mem, w, y);

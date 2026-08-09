@@ -29,6 +29,7 @@ constexpr char kShaderSrc[] = R"(
 cbuffer CB : register(b0) {
   float4x4 uTransform;
   float4   uColor;
+  float4   uTimeRes; // x=time
 };
 struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; };
 struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 col : COLOR0; };
@@ -42,7 +43,28 @@ VSOut VSMain(VSIn i) {
 }
 Texture2D gTex : register(t0);
 SamplerState gSamp : register(s0);
+float3 hsv2rgb(float h, float s, float v) {
+  float3 p = abs(frac(h + float3(0, 2./3., 1./3.)) * 6 - 3);
+  return v * lerp(1, saturate(p - 1), s);
+}
 float4 PSSolid(VSOut i) : SV_Target { return i.col; }
+// Cheap material for scene solids/tris (d3d11 is reference quality).
+float4 PSMaterial(VSOut i) : SV_Target {
+  float2 uv = i.uv;
+  float2 p = uv * 2 - 1;
+  float edge = min(min(uv.x, 1 - uv.x), min(uv.y, 1 - uv.y));
+  float3 bary = float3(uv.x, uv.y, 1 - uv.x - uv.y);
+  if (min(bary.x, min(bary.y, bary.z)) > -0.02 && max(bary.x, max(bary.y, bary.z)) < 0.999)
+    edge = min(edge, min(bary.x, min(bary.y, bary.z)));
+  float rim = saturate(1 - edge * 5);
+  float n = frac(sin(dot(uv * 40 + uTimeRes.x * 0.1, float2(12.9, 78.2))) * 43758.5);
+  float3 c = i.col.rgb * (0.55 + 0.25 * (1 - length(p)) + 0.1 * n);
+  c += i.col.rgb * rim * 0.45;
+  c += hsv2rgb(frac(0.55 + length(p) * 0.2), 0.4, 1) * rim * 0.25;
+  float a = i.col.a * smoothstep(0, 0.03, edge);
+  a = max(a, i.col.a * 0.9);
+  return float4(c, min(a, i.col.a));
+}
 float4 PSText(VSOut i) : SV_Target {
   float a = gTex.Sample(gSamp, i.uv).r;
   return float4(i.col.rgb, i.col.a * a);
@@ -58,6 +80,7 @@ struct CBData
 {
   float transform[16];
   float color[4];
+  float timeRes[4];
 };
 
 void MatIdentity(float* m)
@@ -127,6 +150,8 @@ public:
     mode_ = cfg.mode;
     if (!CreateDevice(error))
       return false;
+    if (!AllocateGpuMem(error))
+      return false;
     if (!CreateSwapchain(error))
       return false;
     if (!CreatePipeline(error))
@@ -144,6 +169,7 @@ public:
     if (queue_ && fence_ && fenceEvent_)
       WaitGpu();
 
+    gpuMem_.clear();
     for (UINT i = 0; i < kFrameCount; ++i)
       renderTargets_[i].Reset();
     swapchain_.Reset();
@@ -254,6 +280,7 @@ public:
       return;
     const UINT fi = frameIndex_ % kFrameCount;
     WaitFrame(fi);
+    timeSec_ = static_cast<float>(info.elapsedSec);
 
     cmdAlloc_[fi]->Reset();
     cmdList_->Reset(cmdAlloc_[fi].Get(), pipelineSolid_.Get());
@@ -533,7 +560,8 @@ private:
     };
     if (!compile("VSMain", "vs_5_0", vs))
       return false;
-    if (!compile("PSSolid", "ps_5_0", psSolid))
+    // Scene solids use material PS (HUD still readable).
+    if (!compile("PSMaterial", "ps_5_0", psSolid))
       return false;
     if (!compile("PSText", "ps_5_0", psText))
       return false;
@@ -805,6 +833,10 @@ private:
     p->color[1] = g;
     p->color[2] = b;
     p->color[3] = a;
+    p->timeRes[0] = timeSec_;
+    p->timeRes[1] = float(width_);
+    p->timeRes[2] = float(height_);
+    p->timeRes[3] = 0.f;
   }
 
   void DrawSolidXform(UINT fi, const float* ortho, float x, float y, float rot, float sx, float sy,
@@ -973,6 +1005,7 @@ private:
   D3D12_VERTEX_BUFFER_VIEW vbView_{};
   D3D12_GPU_VIRTUAL_ADDRESS cbGpu_[kFrameCount]{};
   uint8_t* cbMapped_[kFrameCount]{};
+  float timeSec_ = 0.f;
 
   ComPtr<IDXGIFactory4> factory_;
   ComPtr<ID3D12Device> device_;
@@ -991,6 +1024,54 @@ private:
   ComPtr<ID3D12Resource> cb_[kFrameCount];
   ComPtr<ID3D12Resource> fontTex_;
   ComPtr<ID3D12Resource> fontUpload_;
+  std::vector<ComPtr<ID3D12Resource>> gpuMem_;
+
+  bool AllocateGpuMem(std::wstring* error)
+  {
+    gpuMem_.clear();
+    if (cfg_.gpuMemMb <= 0 || !device_)
+      return true;
+
+    const size_t totalBytes = static_cast<size_t>(cfg_.gpuMemMb) * 1024ull * 1024ull;
+    constexpr size_t kChunk = 64ull * 1024ull * 1024ull;
+    size_t allocated = 0;
+    while (allocated < totalBytes)
+    {
+      size_t n = totalBytes - allocated;
+      if (n > kChunk)
+        n = kChunk;
+      n = (n + 255ull) & ~255ull;
+      if (n == 0)
+        break;
+
+      D3D12_HEAP_PROPERTIES hp{};
+      hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+      D3D12_RESOURCE_DESC rd{};
+      rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+      rd.Width = n;
+      rd.Height = 1;
+      rd.DepthOrArraySize = 1;
+      rd.MipLevels = 1;
+      rd.SampleDesc.Count = 1;
+      rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+      ComPtr<ID3D12Resource> res;
+      const HRESULT hr = device_->CreateCommittedResource(
+          &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res));
+      if (FAILED(hr))
+      {
+        Log("d3d12: gpu-mem alloc failed at %zu / %d MB (hr=0x%08X)",
+            allocated / (1024ull * 1024ull), cfg_.gpuMemMb, static_cast<unsigned>(hr));
+        *error = L"GPU memory allocation failed (try a smaller --gpu-mem)";
+        gpuMem_.clear();
+        return false;
+      }
+      gpuMem_.push_back(std::move(res));
+      allocated += n;
+    }
+    Log("d3d12: holding gpu-mem %d MB (%zu buffers, %zu bytes)", cfg_.gpuMemMb, gpuMem_.size(),
+        allocated);
+    return true;
+  }
 };
 
 } // namespace

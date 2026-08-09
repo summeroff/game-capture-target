@@ -84,6 +84,16 @@ Invoke-Smoke -Label "d3d11 scene orbital" -ArgList @(
   "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
 ) | Out-Null
 
+Invoke-Smoke -Label "d3d11 scene fractal" -ArgList @(
+  "--api", "d3d11", "--scene", "fractal", "--scene-seed", "0",
+  "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+
+Invoke-Smoke -Label "d3d11 gpu-mem 100" -ArgList @(
+  "--api", "d3d11", "--gpu-mem", "100",
+  "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+
 Invoke-Smoke -Label "d3d11 flip-model 0" -ArgList @(
   "--api", "d3d11", "--flip-model", "0", "--exit-after", "$Seconds",
   "--width", "640", "--height", "360", "--vsync", "0"
