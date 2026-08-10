@@ -345,14 +345,12 @@ void App::EmitReady()
   const std::string block = Narrow(BlockCaptureModeName(cfg_.blockCapture));
 
   std::ostringstream o;
-  o << "{\"event\":\"ready\""
-    << ",\"pid\":" << GetCurrentProcessId() << ",\"hwnd\":\"" << FormatHwnd(hwnd_) << "\""
-    << ",\"exe\":\"" << JsonEscapeUtf8(exe) << "\""
-    << ",\"windowClass\":\"" << JsonEscapeUtf8(cls) << "\""
-    << ",\"windowTitle\":\"" << JsonEscapeUtf8(title) << "\""
-    << ",\"clientWidth\":" << cw << ",\"clientHeight\":" << ch << ",\"api\":\""
-    << JsonEscapeUtf8(api) << "\""
-    << ",\"blockCapture\":\"" << JsonEscapeUtf8(block) << "\""
+  o << "{\"event\":\"ready\"" << ",\"pid\":" << GetCurrentProcessId() << ",\"hwnd\":\""
+    << FormatHwnd(hwnd_) << "\"" << ",\"exe\":\"" << JsonEscapeUtf8(exe) << "\""
+    << ",\"windowClass\":\"" << JsonEscapeUtf8(cls) << "\"" << ",\"windowTitle\":\""
+    << JsonEscapeUtf8(title) << "\"" << ",\"clientWidth\":" << cw << ",\"clientHeight\":" << ch
+    << ",\"api\":\"" << JsonEscapeUtf8(api) << "\"" << ",\"blockCapture\":\""
+    << JsonEscapeUtf8(block) << "\""
     << ",\"captureExpected\":" << (cfg_.captureExpected ? "true" : "false")
     << ",\"obsWindowSetting\":\"" << JsonEscapeUtf8(obs) << "\"";
   if (!cfg_.profileId.empty())
