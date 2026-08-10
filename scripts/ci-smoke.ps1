@@ -248,6 +248,40 @@ Invoke-BlockSmoke -Label "events ready + instance" -ExpectBlockMode "none" -Expe
   "--width", "640", "--height", "360", "--vsync", "0", "--block-capture", "none"
 ) | Out-Null
 
+# Unrenamed exe-matched profile must emit warning.exe_mismatch (harness quiet-fail guard).
+Write-Host ""
+Write-Host "=== exe_mismatch warning (unrenamed cs2 profile) ===" -ForegroundColor Cyan
+$mmDir = Join-Path $env:TEMP ("fg-smoke-mm-" + [guid]::NewGuid().ToString("n"))
+New-Item -ItemType Directory -Force -Path $mmDir | Out-Null
+$mmOut = Join-Path $mmDir "out.ndjson"
+$mmErr = Join-Path $mmDir "err.log"
+$mmReady = Join-Path $mmDir "ready.json"
+$prevEa = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& $Exe --profile cs2 --events json --ready-file $mmReady --exit-after $Seconds --width 640 --height 360 --vsync 0 --block-capture none 1>$mmOut 2>$mmErr
+$mmCode = $LASTEXITCODE
+$ErrorActionPreference = $prevEa
+if ($mmCode -ne 0) {
+  Write-Error "exe_mismatch smoke exit=$mmCode"
+  if (Test-Path $mmErr) { Get-Content $mmErr | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" } }
+  exit 1
+}
+$mmLines = @()
+if (Test-Path $mmOut) { $mmLines = @(Get-Content $mmOut | Where-Object { $_ -match '^\s*\{' }) }
+$mmWarn = $mmLines | Where-Object { $_ -match '"event"\s*:\s*"warning"' -and $_ -match 'exe_mismatch' } | Select-Object -First 1
+if (-not $mmWarn) {
+  Write-Error "expected warning exe_mismatch on stdout when --profile cs2 without rename"
+  Write-Host "ndjson lines: $($mmLines.Count)"
+  $mmLines | ForEach-Object { Write-Host "  $_" }
+  exit 1
+}
+if ($mmWarn -notmatch 'cs2\.exe' -or $mmWarn -notmatch 'fakegame\.exe') {
+  Write-Error "exe_mismatch payload missing expected/actual: $mmWarn"
+  exit 1
+}
+Write-Host "exe_mismatch OK" -ForegroundColor Green
+Remove-Item $mmDir -Recurse -Force -ErrorAction SilentlyContinue
+
 # rename-like title/class only (no file rename needed for this smoke)
 Invoke-Smoke -Label "cs2-ish identity" -ArgList @(
   "--profile", "cs2", "--exit-after", "$Seconds",

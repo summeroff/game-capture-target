@@ -83,12 +83,18 @@ Also:
 
 | Flag | Notes |
 |------|-------|
-| `--events json` | NDJSON on **stdout** (`ready`, `block_active`, `hook_attempt` / `hooked` / `hook_blocked`); human logs on **stderr** |
+| `--events json` | NDJSON on **stdout** (`ready`, `warning`, `block_active`, `hook_attempt` / `hooked` / `hook_blocked`); human logs on **stderr** |
 | `--ready-file <path>` | Writes the `ready` object (same fields) for harnesses that cannot read stdout |
 | `--instance <id>` | Disambiguate concurrent runs: suffix on **class** (exe-matched) or **title** (class-matched) |
 
 `ready` includes app-owned `obsWindowSetting` (`title:class:exe` with `#`→`#22`, `:`→`#3A`),
 `clientWidth` / `clientHeight`, `hwnd`, `pid`, `blockCapture`, `captureExpected`.
+
+If a profile matches on **exe** but the process image is still `fakegame.exe` (no rename), a
+`warning` event with `code=exe_mismatch` is emitted (and logged) right after `ready` — so harnesses
+do not silently miss the CS2 compatibility entry. Title-matched profiles get `title_mismatch` when
+the live title does not start with the profile title (prefix, case-insensitive). Class-matched
+profiles get `class_mismatch` when the live class differs from the profile declaration.
 
 Exit codes: `0` OK · `2` bad args · `3` window create · `4` renderer · `5` block unverified · `1` other.
 
@@ -223,9 +229,22 @@ GitHub Actions (`.github/workflows/ci.yml`) on push/PR to `master`, and on tags 
 | **Format** | Ubuntu + pinned `clang-format-18` via `scripts/format.sh --check` |
 | **Build & smoke (x64)** | VS 2022 Release + `scripts/ci-smoke.ps1` (help, `--version`, profiles JSON, d3d11/d3d12/none, flip-model 0, squat-ipc, cs2 profile; vulkan optional) |
 | **Build (Win32)** | x86 Release + short d3d11/none smoke |
-| **GitHub Release** | on `v*` tags only — attaches `fakegame-vX.Y.Z-win-x64.zip` + `…-win-x86.zip` |
+| **GitHub Release** | on `v*` tags only — attaches `fakegame-vX.Y.Z-win-x64.zip` + `…-win-x86.zip` (each zip includes **`fakegame.pdb`**) |
 
 Brace style is **Allman** (`{` / `}` on their own line) with **`} else {`** / **`} else if`** allowed joined. See `CODING_STYLE.md` and `.clang-format`.
+
+**Local format gate (run before every push):** CI pins **Ubuntu clang-format 18.1.3**. Local LLVM 22
+will often green-check while CI fails on `<<` wrapping. Prefer:
+
+```bat
+set PYTHONPATH=
+"%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe" -m pip install "clang-format==18.1.3"
+scripts\format.bat
+scripts\format.bat --check
+```
+
+`format.bat` prefers the PyPI 18.x binary under `site-packages\clang_format\data\bin\` and prints
+the version. Override with `set CLANG_FORMAT=C:\path\to\clang-format.exe`.
 
 ```bat
 scripts\format.bat
@@ -234,6 +253,32 @@ scripts\ci-smoke.ps1
 ```
 
 Workflow for changes: feature branch → PR → leave open for Copilot/human review (do not auto-merge).
+
+## Debug symbols (PDBs) + freeze dumps
+
+Release and local MSVC builds emit **`fakegame.pdb`** next to `fakegame.exe` (`/Zi` + `/DEBUG:FULL`). Tag zips always include the PDB.
+
+| Goal | What to do |
+|------|------------|
+| Local hang/crash | Use the PDB from the same `build\bin\` as the exe that froze |
+| Renamed launch (`cs2.exe` via `launch.ps1`) | PDB is still `fakegame.pdb` — PE debug directory points at that name. Put the PDB next to the renamed exe **or** point the debugger at a symbol path that contains it |
+| Released binary dump | Download the **same** release zip (x64 vs x86 must match). PDB GUID must match that PE — a rebuild of the same commit on another machine usually will **not** load |
+
+**WinDbg (example):**
+
+```text
+.sympath+ C:\path\to\unzipped-release-or-build-bin
+.reload /f
+k
+!analyze -v
+```
+
+**Visual Studio:** open the `.dmp` → set symbol path to the folder that has the matching `fakegame.pdb`.
+
+Notes:
+
+- A dump from a binary that shipped **without** a PDB (e.g. early `v0.2.0` if the zip had no PDB) cannot get a full stack from a later rebuild — the CodeView signature will not match.
+- A freeze while a harness pipes/redirects stdout can be the **reader** blocking on a full pipe, not only an app bug. Prefer `--ready-file` + stderr logs, or consume NDJSON promptly when using `--events json`.
 
 ## Releases (version tags)
 

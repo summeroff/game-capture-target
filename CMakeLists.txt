@@ -123,6 +123,10 @@ if(MSVC)
     /permissive-
     /utf-8
     /Zc:__cplusplus
+    # Full program-database symbols in every config (including Release).
+    # Needed so freeze dumps from renamed launch copies (cs2.exe, etc.) can be
+    # resolved after downloading the matching release PDB.
+    /Zi
   )
   set_target_properties(fakegame PROPERTIES
     WIN32_EXECUTABLE FALSE
@@ -130,6 +134,23 @@ if(MSVC)
   )
   target_link_options(fakegame PRIVATE
     /INCREMENTAL:NO
+    /DEBUG:FULL
+    # Keep /OPT:REF /OPT:ICF on Release; /DEBUG still emits a usable PDB.
+    $<$<CONFIG:Release>:/OPT:REF>
+    $<$<CONFIG:Release>:/OPT:ICF>
+  )
+  # Multi-config VS generators otherwise drop PDBs under bin/Release/.
+  set_target_properties(fakegame PROPERTIES
+    PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    PDB_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin"
+    PDB_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin"
+    PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/bin"
+    PDB_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/bin"
+    COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    COMPILE_PDB_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin"
+    COMPILE_PDB_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin"
+    COMPILE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/bin"
+    COMPILE_PDB_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/bin"
   )
 endif()
 

@@ -362,6 +362,67 @@ void App::EmitReady()
   // Always log human-readable ready line for non-events consumers / correlation.
   Log("ready: hwnd=%s pid=%lu obsWindowSetting=%s client=%dx%d", FormatHwnd(hwnd_).c_str(),
       GetCurrentProcessId(), obs.c_str(), cw, ch);
+
+  // Quiet failure mode: profile identity without rename / override that breaks OBS match.
+  EmitProfileMatchWarnings();
+}
+
+void App::EmitProfileMatchWarnings()
+{
+  if (cfg_.profileId.empty() || cfg_.profileMatchFlags == 0)
+    return;
+
+  const int mf = cfg_.profileMatchFlags;
+
+  auto emitMismatch = [&](const char* code, const std::string& expected, const std::string& actual,
+                          const char* detail) {
+    std::ostringstream o;
+    o << "{\"event\":\"warning\",\"code\":\"" << code << "\"" << ",\"expected\":\""
+      << JsonEscapeUtf8(expected) << "\"" << ",\"actual\":\"" << JsonEscapeUtf8(actual) << "\""
+      << ",\"profile\":\"" << JsonEscapeUtf8(cfg_.profileId) << "\"" << ",\"detail\":\""
+      << JsonEscapeUtf8(detail) << "\"" << ",\"ts\":\"" << EventsTimestamp() << "\"}";
+    EmitEventJson(o.str());
+    Log("warning: %s expected=%s actual=%s (profile %s)", code, expected.c_str(), actual.c_str(),
+        cfg_.profileId.c_str());
+  };
+
+  // EXE-matched profiles need the process image name to match the compatibility entry.
+  if ((mf & 1) != 0 && !cfg_.profileExeName.empty())
+  {
+    const std::string actual = CurrentExeBaseName();
+    if (_stricmp(actual.c_str(), cfg_.profileExeName.c_str()) != 0)
+    {
+      emitMismatch("exe_mismatch", cfg_.profileExeName, actual,
+                   "profile matches on exe; rename the binary (launch.ps1 / spawn-as.ps1) "
+                   "or the compatibility entry will not apply");
+    }
+  }
+
+  // Title-matched (often as prefix, e.g. Minecraft "Minecraft 1.21").
+  if ((mf & 2) != 0 && !cfg_.profileExpectedTitle.empty())
+  {
+    const std::wstring& exp = cfg_.profileExpectedTitle;
+    const std::wstring& act = cfg_.title;
+    const bool prefixOk =
+        act.size() >= exp.size() && _wcsnicmp(act.c_str(), exp.c_str(), exp.size()) == 0;
+    if (!prefixOk)
+    {
+      emitMismatch("title_mismatch", Narrow(exp), Narrow(act),
+                   "profile matches on title prefix; set --title to start with the profile title "
+                   "or the compatibility entry will not apply");
+    }
+  }
+
+  // Class-matched: warn if CLI/--instance path left a different class than the profile declared.
+  if ((mf & 4) != 0 && !cfg_.profileExpectedClass.empty())
+  {
+    if (_wcsicmp(cfg_.windowClass.c_str(), cfg_.profileExpectedClass.c_str()) != 0)
+    {
+      emitMismatch("class_mismatch", Narrow(cfg_.profileExpectedClass), Narrow(cfg_.windowClass),
+                   "profile matches on window class; class override will not match the "
+                   "compatibility entry");
+    }
+  }
 }
 
 void App::LiftReversibleBlock()

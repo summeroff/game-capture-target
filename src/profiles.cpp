@@ -152,6 +152,10 @@ void ApplyProfile(const Profile& p, Config* cfg)
     cfg->windowClass = p.windowClass;
   if (p.exeName && *p.exeName)
     cfg->profileExeName = p.exeName;
+  if (p.windowClass && *p.windowClass)
+    cfg->profileExpectedClass = p.windowClass;
+  if (p.windowTitle && *p.windowTitle)
+    cfg->profileExpectedTitle = p.windowTitle;
   cfg->blockCapture = p.defaultBlock;
   cfg->captureExpected = p.captureExpected;
   cfg->profileSeverity = p.severity;

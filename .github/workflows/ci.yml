@@ -10,6 +10,7 @@
 #          tag vX.Y.Z → -DFG_RELEASE_VERSION=X.Y.Z (no leading v).
 #
 # Runner: windows-2022 (not windows-latest) for -G "Visual Studio 17 2022".
+# Symbols: Release builds emit fakegame.pdb next to the exe; tag zips always include it.
 
 name: CI
 
@@ -29,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install clang-format 18
         run: |
@@ -52,7 +53,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Resolve release version
         id: ver
@@ -89,6 +90,21 @@ jobs:
       - name: Build Release
         run: cmake --build build --config Release --parallel
 
+      - name: Assert PDB next to exe
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path .\build\bin\fakegame.exe
+          $pdb = Join-Path (Split-Path $exe) 'fakegame.pdb'
+          if (-not (Test-Path -LiteralPath $pdb)) {
+            Write-Error "missing PDB: $pdb (Release must emit /Zi + /DEBUG)"
+            Get-ChildItem .\build\bin -Recurse -Filter *.pdb -ErrorAction SilentlyContinue | Format-Table FullName, Length
+            exit 1
+          }
+          $pe = Get-Item $exe
+          $pd = Get-Item $pdb
+          Write-Host "exe=$($pe.FullName) size=$($pe.Length)"
+          Write-Host "pdb=$($pd.FullName) size=$($pd.Length)"
+
       - name: Smoke (CLI + short API runs)
         shell: pwsh
         run: |
@@ -119,12 +135,12 @@ jobs:
 
       - name: Upload Release artifact
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fakegame-release-win-x64
           path: |
             build/bin/fakegame.exe
-            build/bin/*.pdb
+            build/bin/fakegame.pdb
           if-no-files-found: error
           retention-days: 14
 
@@ -137,9 +153,11 @@ jobs:
           $dir = "dist/$name"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Copy-Item "build/bin/fakegame.exe" "$dir/"
-          if (Test-Path "build/bin/fakegame.pdb") {
-            Copy-Item "build/bin/fakegame.pdb" "$dir/"
+          if (-not (Test-Path "build/bin/fakegame.pdb")) {
+            Write-Error "Release zip requires build/bin/fakegame.pdb"
+            exit 1
           }
+          Copy-Item "build/bin/fakegame.pdb" "$dir/"
           if (Test-Path "README.md") { Copy-Item "README.md" "$dir/" }
           if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$dir/" }
           Compress-Archive -Path "$dir/*" -DestinationPath "$name.zip" -Force
@@ -147,7 +165,7 @@ jobs:
 
       - name: Upload release zip artifact (x64)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-zip-win-x64
           path: fakegame-*-win-x64.zip
@@ -161,7 +179,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Resolve release version
         id: ver
@@ -193,6 +211,17 @@ jobs:
       - name: Build Release x86
         run: cmake --build build-x86 --config Release --parallel
 
+      - name: Assert PDB next to exe (x86)
+        shell: pwsh
+        run: |
+          $pdb = "build-x86/bin/fakegame.pdb"
+          if (-not (Test-Path -LiteralPath $pdb)) {
+            Write-Error "missing PDB: $pdb"
+            Get-ChildItem .\build-x86\bin -Recurse -Filter *.pdb -ErrorAction SilentlyContinue | Format-Table FullName, Length
+            exit 1
+          }
+          Write-Host "pdb OK: $((Get-Item $pdb).FullName) size=$((Get-Item $pdb).Length)"
+
       - name: Quick x86 smoke (d3d11 + none)
         shell: pwsh
         run: |
@@ -216,9 +245,11 @@ jobs:
           $dir = "dist/$name"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Copy-Item "build-x86/bin/fakegame.exe" "$dir/"
-          if (Test-Path "build-x86/bin/fakegame.pdb") {
-            Copy-Item "build-x86/bin/fakegame.pdb" "$dir/"
+          if (-not (Test-Path "build-x86/bin/fakegame.pdb")) {
+            Write-Error "Release zip requires build-x86/bin/fakegame.pdb"
+            exit 1
           }
+          Copy-Item "build-x86/bin/fakegame.pdb" "$dir/"
           if (Test-Path "README.md") { Copy-Item "README.md" "$dir/" }
           if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   "$dir/" }
           Compress-Archive -Path "$dir/*" -DestinationPath "$name.zip" -Force
@@ -226,7 +257,7 @@ jobs:
 
       - name: Upload release zip artifact (x86)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-zip-win-x86
           path: fakegame-*-win-x86.zip
@@ -262,7 +293,7 @@ jobs:
           fi
 
       - name: Download release zips
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-zip-win-*
           merge-multiple: true
@@ -281,5 +312,9 @@ jobs:
             dist/fakegame-*-win-x86.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
+          body: |
+            Release builds include **`fakegame.pdb`** beside the exe in each zip.
+            For freeze dumps of a renamed copy (`cs2.exe`, etc.), load the dump in WinDbg/VS
+            with the PDB from the **same** zip (PE + PDB CodeView GUID must match).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
