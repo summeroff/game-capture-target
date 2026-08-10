@@ -83,12 +83,17 @@ Also:
 
 | Flag | Notes |
 |------|-------|
-| `--events json` | NDJSON on **stdout** (`ready`, `block_active`, `hook_attempt` / `hooked` / `hook_blocked`); human logs on **stderr** |
+| `--events json` | NDJSON on **stdout** (`ready`, `warning`, `block_active`, `hook_attempt` / `hooked` / `hook_blocked`); human logs on **stderr** |
 | `--ready-file <path>` | Writes the `ready` object (same fields) for harnesses that cannot read stdout |
 | `--instance <id>` | Disambiguate concurrent runs: suffix on **class** (exe-matched) or **title** (class-matched) |
 
 `ready` includes app-owned `obsWindowSetting` (`title:class:exe` with `#`→`#22`, `:`→`#3A`),
 `clientWidth` / `clientHeight`, `hwnd`, `pid`, `blockCapture`, `captureExpected`.
+
+If a profile matches on **exe** but the process image is still `fakegame.exe` (no rename), a
+`warning` event with `code=exe_mismatch` is emitted (and logged) right after `ready` — so harnesses
+do not silently miss the CS2 compatibility entry. Class-matched profiles get `class_mismatch` when
+the live class differs from the profile declaration.
 
 Exit codes: `0` OK · `2` bad args · `3` window create · `4` renderer · `5` block unverified · `1` other.
 

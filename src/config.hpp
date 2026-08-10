@@ -51,10 +51,13 @@ struct Config
   bool showBlockErrors = false;     // if true, skip SetErrorMode suppression
 
   std::string profileId;
-  std::string profileExeName; // informational; rename is done by launch scripts
+  std::string profileExeName; // profile's declared exe; rename is done by launch scripts
+  // Profile identity before CLI overrides / --instance suffixes (for match warnings).
+  std::wstring profileExpectedClass;
+  std::wstring profileExpectedTitle;
   bool captureExpected = true;
   int profileSeverity = -1;
-  int profileMatchFlags = 0;
+  int profileMatchFlags = 0; // EXE=1 TITLE=2 CLASS=4
   bool profileGameCapture = true;
   bool profileWindowCapture = false;
 

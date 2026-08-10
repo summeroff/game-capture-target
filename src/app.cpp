@@ -362,6 +362,62 @@ void App::EmitReady()
   // Always log human-readable ready line for non-events consumers / correlation.
   Log("ready: hwnd=%s pid=%lu obsWindowSetting=%s client=%dx%d", FormatHwnd(hwnd_).c_str(),
       GetCurrentProcessId(), obs.c_str(), cw, ch);
+
+  // Quiet failure mode: profile identity without rename / override that breaks OBS match.
+  EmitProfileMatchWarnings();
+}
+
+void App::EmitProfileMatchWarnings()
+{
+  if (cfg_.profileId.empty() || cfg_.profileMatchFlags == 0)
+    return;
+
+  const int mf = cfg_.profileMatchFlags;
+
+  // EXE-matched profiles need the process image name to match the compatibility entry.
+  if ((mf & 1) != 0 && !cfg_.profileExeName.empty())
+  {
+    const std::string actual = CurrentExeBaseName();
+    if (_stricmp(actual.c_str(), cfg_.profileExeName.c_str()) != 0)
+    {
+      std::ostringstream o;
+      o << "{\"event\":\"warning\",\"code\":\"exe_mismatch\""
+        << ",\"expected\":\"" << JsonEscapeUtf8(cfg_.profileExeName) << "\""
+        << ",\"actual\":\"" << JsonEscapeUtf8(actual) << "\""
+        << ",\"profile\":\"" << JsonEscapeUtf8(cfg_.profileId) << "\""
+        << ",\"detail\":\""
+        << JsonEscapeUtf8("profile matches on exe; rename the binary (launch.ps1 / spawn-as.ps1) "
+                          "or the compatibility entry will not apply")
+        << "\""
+        << ",\"ts\":\"" << EventsTimestamp() << "\"}";
+      EmitEventJson(o.str());
+      Log("warning: exe_mismatch expected=%s actual=%s (profile %s matches on exe - rename binary)",
+          cfg_.profileExeName.c_str(), actual.c_str(), cfg_.profileId.c_str());
+    }
+  }
+
+  // Class-matched: warn if CLI/--instance path left a different class than the profile declared.
+  if ((mf & 4) != 0 && !cfg_.profileExpectedClass.empty())
+  {
+    if (_wcsicmp(cfg_.windowClass.c_str(), cfg_.profileExpectedClass.c_str()) != 0)
+    {
+      const std::string expected = Narrow(cfg_.profileExpectedClass);
+      const std::string actual = Narrow(cfg_.windowClass);
+      std::ostringstream o;
+      o << "{\"event\":\"warning\",\"code\":\"class_mismatch\""
+        << ",\"expected\":\"" << JsonEscapeUtf8(expected) << "\""
+        << ",\"actual\":\"" << JsonEscapeUtf8(actual) << "\""
+        << ",\"profile\":\"" << JsonEscapeUtf8(cfg_.profileId) << "\""
+        << ",\"detail\":\""
+        << JsonEscapeUtf8("profile matches on window class; class override will not match the "
+                          "compatibility entry")
+        << "\""
+        << ",\"ts\":\"" << EventsTimestamp() << "\"}";
+      EmitEventJson(o.str());
+      Log("warning: class_mismatch expected=%s actual=%s (profile %s matches on class)",
+          expected.c_str(), actual.c_str(), cfg_.profileId.c_str());
+    }
+  }
 }
 
 void App::LiftReversibleBlock()

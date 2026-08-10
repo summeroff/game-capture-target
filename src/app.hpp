@@ -54,6 +54,7 @@ private:
   void EmitBlockActive(const char* mode, bool verified, const char* detail);
   void EmitHookBlocked(const char* reason);
   void EmitReady();
+  void EmitProfileMatchWarnings();
   void TickHookEvents();
   void Frame();
   void RequestQuit();
