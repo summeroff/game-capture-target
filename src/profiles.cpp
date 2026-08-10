@@ -14,9 +14,9 @@ const Profile kProfiles[] = {
      false, true, BlockCaptureMode::None, "exe match; Warning + allow_third_party_software msg"},
 
     {"cs2-blocked", "CS2 (capture blocked)", "cs2.exe", L"FakeGameWindowClass", L"Counter-Strike 2",
-     1, 1, true, false, false, BlockCaptureMode::SquatIpc,
-     "same as cs2 + squat-ipc (silent refuse; F7 reversible). Use --block-capture signature-policy "
-     "for loader-level fidelity"},
+     1, 1, true, false, false, BlockCaptureMode::SignaturePolicy,
+     "same as cs2 + signature-policy (verified refuse; SetErrorMode silences Bad Image). "
+     "squat-ipc remains available via --block-capture squat-ipc (F7 reversible)"},
 
     {"minecraft", "Minecraft: Java Edition", "javaw.exe", L"FakeGameWindowClass", L"Minecraft", 3,
      0, true, false, true, BlockCaptureMode::None,
@@ -186,6 +186,9 @@ std::string ProfilesToJson(bool pretty)
     o << sp2 << "\"captureExpected\":" << (p.captureExpected ? "true" : "false") << "," << nl;
     o << sp2 << "\"defaultBlock\":\"" << Narrow(BlockCaptureModeName(p.defaultBlock)) << "\","
       << nl;
+    // Default client size before launch overrides (harness pre-size).
+    o << sp2 << "\"clientWidth\":1280," << nl;
+    o << sp2 << "\"clientHeight\":720," << nl;
     o << sp2 << "\"notes\":\"" << JsonEscape(p.notes ? p.notes : "") << "\"" << nl;
     o << sp << "}" << (i + 1 < list.size() ? "," : "") << nl;
   }

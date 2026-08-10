@@ -23,6 +23,8 @@ if [[ -z "$CF" ]] || ! command -v "$CF" >/dev/null 2>&1; then
   exit 2
 fi
 
+echo "clang-format: $($CF --version | head -n1)"
+
 mapfile -t FILES < <(find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) | sort)
 if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "No source files under src/"
@@ -31,13 +33,23 @@ fi
 
 if [[ "$CHECK" -eq 1 ]]; then
   fail=0
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
   for f in "${FILES[@]}"; do
-    if ! "$CF" --dry-run --Werror --style=file "$f" 2>/dev/null; then
-      # older clang-format may lack --dry-run: fall back to diff
-      if ! diff -u "$f" <("$CF" --style=file "$f") >/dev/null; then
-        echo "NEED FORMAT: $f"
-        fail=1
-      fi
+    out="$tmpdir/$(echo "$f" | tr '/\\' '__')"
+    # Always materialize formatted output and diff — more reliable than --dry-run --Werror
+    # (which can fail for non-format reasons while hiding stderr).
+    if ! "$CF" --style=file "$f" >"$out" 2>"$tmpdir/cf.err"; then
+      echo "NEED FORMAT: $f (clang-format failed)"
+      cat "$tmpdir/cf.err" >&2 || true
+      fail=1
+      continue
+    fi
+    if ! diff -u "$f" "$out" >"$tmpdir/diff.out"; then
+      echo "NEED FORMAT: $f"
+      # Cap diff noise but always show the hunk so CI logs are actionable.
+      head -n 200 "$tmpdir/diff.out" || true
+      fail=1
     fi
   done
   if [[ "$fail" -ne 0 ]]; then

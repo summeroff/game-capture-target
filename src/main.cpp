@@ -1,5 +1,7 @@
 #include "app.hpp"
 #include "config.hpp"
+#include "events.hpp"
+#include "exit_codes.hpp"
 #include "log.hpp"
 #include "profiles.hpp"
 
@@ -23,6 +25,7 @@ void ShowStartupBanner(const Config& cfg)
 int wmain(int argc, wchar_t** argv)
 {
   setvbuf(stdout, nullptr, _IONBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
 
   Config cfg;
   std::wstring error;
@@ -30,19 +33,19 @@ int wmain(int argc, wchar_t** argv)
   {
     std::fwprintf(stderr, L"error: %s\n\n", error.c_str());
     PrintHelp();
-    return 2;
+    return static_cast<int>(FgExit::BadArgs);
   }
 
   if (cfg.help)
   {
     PrintHelp();
-    return 0;
+    return static_cast<int>(FgExit::Ok);
   }
 
   if (cfg.version)
   {
     PrintVersion();
-    return 0;
+    return static_cast<int>(FgExit::Ok);
   }
 
   if (cfg.listProfiles)
@@ -55,13 +58,36 @@ int wmain(int argc, wchar_t** argv)
     {
       PrintProfilesTable();
     }
-    return 0;
+    return static_cast<int>(FgExit::Ok);
   }
 
   if (cfg.listScenes)
   {
     scene::PrintSceneList();
-    return 0;
+    return static_cast<int>(FgExit::Ok);
+  }
+
+  // Enable NDJSON events before any further logging that harnesses might scrape.
+  if (cfg.eventsJson)
+    EventsSetEnabled(true);
+  if (!cfg.readyFile.empty())
+    EventsSetReadyFile(cfg.readyFile);
+
+  if (!cfg.instanceId.empty())
+  {
+    const bool classOnly = (cfg.profileMatchFlags == 4) ||
+                           ((cfg.profileMatchFlags & 4) != 0 && (cfg.profileMatchFlags & 3) == 0);
+    if (classOnly)
+    {
+      Log("instance: title suffix => %s", Narrow(cfg.title).c_str());
+      if ((cfg.profileMatchFlags & 2) != 0)
+        Log("warn: instance suffix on title may affect title-prefix match; keep id short");
+    } else
+    {
+      Log("instance: class suffix => %s", Narrow(cfg.windowClass).c_str());
+      if ((cfg.profileMatchFlags & 4) != 0)
+        Log("warn: instance changed class but profile also matches class — may break class match");
+    }
   }
 
   // Suppress Windows hard-error boxes for failed DLL loads (e.g. signature-policy
@@ -89,7 +115,8 @@ int wmain(int argc, wchar_t** argv)
   {
     std::fwprintf(stderr, L"init failed: %s\n", error.c_str());
     Log("init failed: %s", Narrow(error).c_str());
-    return 1;
+    const FgExit code = app.LastExit();
+    return static_cast<int>(code == FgExit::Ok ? FgExit::GeneralFailure : code);
   }
 
   return app.Run();

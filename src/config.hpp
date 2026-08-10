@@ -58,6 +58,14 @@ struct Config
   bool profileGameCapture = true;
   bool profileWindowCapture = false;
 
+  // NDJSON events on stdout (human Log → stderr). ready also optional to file.
+  bool eventsJson = false;
+  std::wstring readyFile;
+
+  // Disambiguate concurrent same-profile runs without breaking OBS match mode.
+  // Appended to window class (exe-matched) or title (class-matched).
+  std::wstring instanceId;
+
   bool listProfiles = false;
   bool listProfilesJson = false;
   bool listScenes = false;

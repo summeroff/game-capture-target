@@ -80,11 +80,23 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 $joined = if ($jsonOut -is [array]) { $jsonOut -join "`n" } else { [string]$jsonOut }
-try {
-  $null = $joined | ConvertFrom-Json
-  Write-Host "JSON OK ($($joined.Length) chars)"
-} catch {
-  Write-Error "list-profiles --json is not valid JSON: $_"
+# PS 5.1 ConvertFrom-Json can collapse arrays-of-objects into one object with
+# array-valued properties. Wrap so the array is a single property value.
+$wrapped = '{"items":' + $joined.Trim() + '}'
+$parsed = ConvertFrom-Json -InputObject $wrapped
+$profiles = @($parsed.items)
+Write-Host "JSON OK ($($joined.Length) chars, $($profiles.Count) profiles)"
+$blocked = $profiles | Where-Object { [string]$_.id -eq 'cs2-blocked' } | Select-Object -First 1
+if (-not $blocked) {
+  Write-Error "cs2-blocked profile missing"
+  exit 1
+}
+if ([string]$blocked.defaultBlock -ne 'signature-policy') {
+  Write-Error "cs2-blocked defaultBlock=$($blocked.defaultBlock) expected signature-policy"
+  exit 1
+}
+if (-not $blocked.clientWidth -or -not $blocked.clientHeight) {
+  Write-Error "profiles JSON missing clientWidth/clientHeight"
   exit 1
 }
 
@@ -133,10 +145,107 @@ Invoke-Smoke -Label "d3d12 orbital" -ArgList @(
   "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
 ) | Out-Null
 
-# block mode that does not need OBS: just proves flag parses + process lives
-Invoke-Smoke -Label "squat-ipc arm" -ArgList @(
+# block modes: must self-verify (exit 0 + process lived). Prefer --events json + ready-file.
+function Invoke-BlockSmoke {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string[]]$ArgList,
+    [string]$ExpectBlockMode,
+    [string]$ExpectInstance = ''
+  )
+  Write-Host ""
+  Write-Host "=== $Label ===" -ForegroundColor Cyan
+  $dir = Join-Path $env:TEMP ("fg-smoke-" + [guid]::NewGuid().ToString("n"))
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $ready = Join-Path $dir "ready.json"
+  $stdout = Join-Path $dir "out.ndjson"
+  $stderr = Join-Path $dir "err.log"
+  $fullArgs = @($ArgList) + @("--events", "json", "--ready-file", $ready)
+  # Prefer call operator: Start-Process ArgumentList array is unquoted on PS 5.1.
+  Write-Host ("> " + $Exe + " " + ($fullArgs -join " "))
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  & $Exe @fullArgs 1>$stdout 2>$stderr
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($null -eq $code) { $code = -1 }
+  Write-Host "exit=$code (expect 0)"
+  if ($code -ne 0) {
+    if (Test-Path $stderr) { Get-Content $stderr | Select-Object -Last 30 | Write-Host }
+    Write-Host "SMOKE FAIL: $Label exited $code" -ForegroundColor Red
+    exit 1
+  }
+  if (-not (Test-Path $ready)) {
+    Write-Host "SMOKE FAIL: $Label missing ready-file" -ForegroundColor Red
+    exit 1
+  }
+  $readyObj = (Get-Content -LiteralPath $ready -Raw).Trim() | ConvertFrom-Json
+  if (-not $readyObj.obsWindowSetting) {
+    Write-Host "SMOKE FAIL: $Label ready missing obsWindowSetting" -ForegroundColor Red
+    exit 1
+  }
+  if (-not $readyObj.clientWidth -or -not $readyObj.clientHeight) {
+    Write-Host "SMOKE FAIL: $Label ready missing client size" -ForegroundColor Red
+    exit 1
+  }
+  $nd = @()
+  if (Test-Path $stdout) {
+    $nd = @(Get-Content -LiteralPath $stdout | Where-Object { $_ -match '^\s*\{' })
+  }
+  $readyLine = $nd | Where-Object { $_ -match '"event"\s*:\s*"ready"' } | Select-Object -First 1
+  if (-not $readyLine) {
+    Write-Host "SMOKE FAIL: $Label missing ready event on stdout NDJSON (lines=$($nd.Count))" -ForegroundColor Red
+    exit 1
+  }
+  $blockLine = $nd | Where-Object { $_ -match '"event"\s*:\s*"block_active"' } | Select-Object -Last 1
+  if ($ExpectBlockMode -and $ExpectBlockMode -ne 'none') {
+    if (-not $blockLine) {
+      Write-Host "SMOKE FAIL: $Label missing block_active event" -ForegroundColor Red
+      exit 1
+    }
+    if ($blockLine -notmatch '"verified"\s*:\s*true') {
+      Write-Host "SMOKE FAIL: $Label block_active not verified: $blockLine" -ForegroundColor Red
+      exit 1
+    }
+    if ($blockLine -notmatch [regex]::Escape($ExpectBlockMode)) {
+      Write-Host "SMOKE FAIL: $Label block mode mismatch: $blockLine" -ForegroundColor Red
+      exit 1
+    }
+  }
+  if ($ExpectInstance) {
+    $cls = [string]$readyObj.windowClass
+    $instField = [string]$readyObj.instance
+    $okInst = ($instField -eq $ExpectInstance) -or ($cls -like "*_${ExpectInstance}")
+    if (-not $okInst) {
+      Write-Host "SMOKE FAIL: $Label instance not applied class=$cls instance=$instField expect=$ExpectInstance" -ForegroundColor Red
+      exit 1
+    }
+    Write-Host "instance OK class=$cls"
+  }
+  Write-Host "ready+block OK obs=$($readyObj.obsWindowSetting)"
+  Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+  return $true
+}
+
+# block mode that does not need OBS: proves flag + self-verify
+Invoke-BlockSmoke -Label "squat-ipc arm+verify" -ExpectBlockMode "squat-ipc" -ArgList @(
   "--api", "d3d11", "--block-capture", "squat-ipc", "--exit-after", "$Seconds",
   "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+
+Invoke-BlockSmoke -Label "signature-policy arm+verify" -ExpectBlockMode "signature-policy" -ArgList @(
+  "--api", "d3d11", "--block-capture", "signature-policy", "--exit-after", "$Seconds",
+  "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+
+Invoke-BlockSmoke -Label "cs2-blocked profile default" -ExpectBlockMode "signature-policy" -ArgList @(
+  "--profile", "cs2-blocked", "--exit-after", "$Seconds",
+  "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+
+Invoke-BlockSmoke -Label "events ready + instance" -ExpectBlockMode "none" -ExpectInstance "smoke1" -ArgList @(
+  "--profile", "cs2", "--instance", "smoke1", "--exit-after", "$Seconds",
+  "--width", "640", "--height", "360", "--vsync", "0", "--block-capture", "none"
 ) | Out-Null
 
 # rename-like title/class only (no file rename needed for this smoke)
@@ -145,7 +254,7 @@ Invoke-Smoke -Label "cs2-ish identity" -ArgList @(
   "--width", "640", "--height", "360", "--vsync", "0"
 ) | Out-Null
 
-# vulkan is optional — runner may lack vulkan-1.dll
+# vulkan is optional - runner may lack vulkan-1.dll
 $vk = Invoke-Smoke -Label "vulkan (optional)" -Optional -ArgList @(
   "--api", "vulkan", "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
 )

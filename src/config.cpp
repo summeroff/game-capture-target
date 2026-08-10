@@ -361,6 +361,28 @@ struct FlagSeen
   bool block = false;
 };
 
+// MATCH_CLASS = 4. Class-only profiles: suffix goes on title so class still matches.
+// Otherwise suffix goes on window class so exe/title match stays intact.
+// No Log here — ParseConfig runs before --events redirects Log to stderr.
+void ApplyInstanceId(Config* c)
+{
+  if (!c || c->instanceId.empty())
+    return;
+
+  const bool classOnly = (c->profileMatchFlags == 4) ||
+                         ((c->profileMatchFlags & 4) != 0 && (c->profileMatchFlags & 3) == 0);
+  if (classOnly)
+  {
+    c->title += L" [";
+    c->title += c->instanceId;
+    c->title += L"]";
+  } else
+  {
+    c->windowClass += L"_";
+    c->windowClass += c->instanceId;
+  }
+}
+
 } // namespace
 
 const wchar_t* WindowModeName(WindowMode m)
@@ -441,6 +463,11 @@ void PrintConfig(const Config& c)
   Log("  block-after = %d", c.blockCaptureAfterSeconds);
   Log("  show-block-errors = %d", c.showBlockErrors ? 1 : 0);
   Log("  capture-expected = %s", c.captureExpected ? "yes" : "NO");
+  Log("  events       = %s", c.eventsJson ? "json" : "off");
+  if (!c.readyFile.empty())
+    Log("  ready-file   = %s", Narrow(c.readyFile).c_str());
+  if (!c.instanceId.empty())
+    Log("  instance     = %s", Narrow(c.instanceId).c_str());
   Log("=======================");
 }
 
@@ -476,6 +503,9 @@ Options:
   --block-capture <mode>    none | signature-policy | squat-ipc | unload-hook
   --block-capture-after <s> Delay before applying block (0 = immediate)
   --show-block-errors       Do not suppress Windows loader hard-error dialogs
+  --events json             NDJSON events on stdout (ready/hook/block); Log→stderr
+  --ready-file <path>       Write ready event JSON to file (harnesses without stdout)
+  --instance <id>           Disambiguate concurrent runs (class or title suffix)
   --version / -V            Print version string and exit
   --help                    This help
 
@@ -491,10 +521,13 @@ Capture blocking:
                     IRREVERSIBLE for the process — cannot be toggled off.
                     By default loader "Bad Image" dialogs are suppressed
                     (SetErrorMode); use --show-block-errors to see them.
-  squat-ipc         Pre-create OBS hook IPC objects (CaptureHook_* + pid) with
-                    an empty DACL so hook init fails. Reversible (F7).
-                    Default mechanism for profile cs2-blocked (silent).
+                    Default mechanism for profile cs2-blocked (verified).
+  squat-ipc         Hold graphics_hook_dup_mutex+pid (hook DllMain duplicate
+                    early-out) + empty-DACL CaptureHook_* objects. Reversible (F7).
   unload-hook       Poll for graphics-hook*.dll and FreeLibrary it. Reversible (F7).
+
+  Every block mode self-verifies and emits block_active{verified}. Unverified
+  blocks exit non-zero (code 5).
 
 Hotkeys:
   F1  Cycle windowed / borderless / fullscreen-exclusive
@@ -505,6 +538,14 @@ Hotkeys:
   F6  Toggle churn mode (~2 Hz resize/recreate)
   F7  Toggle reversible capture block (squat-ipc / unload-hook)
   Esc Quit
+
+Exit codes:
+  0  OK
+  2  Bad arguments
+  3  Window create failed
+  4  Renderer init failed
+  5  Block requested but verification failed
+  1  Other failure
 
 Rename-friendly: behaviour never depends on the exe filename.
 Use tools\launch.ps1 or tools\spawn-as.ps1 to copy+launch as cs2.exe etc.
@@ -796,6 +837,49 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
       c.showBlockErrors = true;
       continue;
     }
+    if (EqI(a, L"--events"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--events"))
+        return false;
+      if (_wcsicmp(v.c_str(), L"json") != 0)
+      {
+        *error = L"invalid --events (only 'json' is supported)";
+        return false;
+      }
+      c.eventsJson = true;
+      continue;
+    }
+    if (EqI(a, L"--ready-file"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--ready-file"))
+        return false;
+      c.readyFile = v;
+      continue;
+    }
+    if (EqI(a, L"--instance"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--instance"))
+        return false;
+      if (v.empty())
+      {
+        *error = L"empty --instance";
+        return false;
+      }
+      // Keep instance token simple for class/title safety.
+      for (wchar_t ch : v)
+      {
+        if (ch < 32 || wcschr(L"\\/:*?\"<>|", ch))
+        {
+          *error = L"invalid --instance (avoid path/control chars)";
+          return false;
+        }
+      }
+      c.instanceId = v;
+      continue;
+    }
 
     *error = L"unknown argument: " + a;
     return false;
@@ -816,6 +900,22 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
   if (seen.block)
   {
     c.captureExpected = (c.blockCapture == BlockCaptureMode::None);
+  }
+
+  // Instance suffix after title/class overrides so CLI --title/--class are base values.
+  if (!c.instanceId.empty())
+  {
+    if (seen.title && ((c.profileMatchFlags == 4) ||
+                       ((c.profileMatchFlags & 4) != 0 && (c.profileMatchFlags & 3) == 0)))
+    {
+      // User set title explicitly on class-matched profile; still append instance.
+    }
+    if (seen.cls && !((c.profileMatchFlags == 4) ||
+                      ((c.profileMatchFlags & 4) != 0 && (c.profileMatchFlags & 3) == 0)))
+    {
+      // User set class on exe-matched; still append instance.
+    }
+    ApplyInstanceId(&c);
   }
 
   *out = std::move(c);
