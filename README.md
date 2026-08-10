@@ -92,8 +92,9 @@ Also:
 
 If a profile matches on **exe** but the process image is still `fakegame.exe` (no rename), a
 `warning` event with `code=exe_mismatch` is emitted (and logged) right after `ready` — so harnesses
-do not silently miss the CS2 compatibility entry. Class-matched profiles get `class_mismatch` when
-the live class differs from the profile declaration.
+do not silently miss the CS2 compatibility entry. Title-matched profiles get `title_mismatch` when
+the live title does not start with the profile title (prefix, case-insensitive). Class-matched
+profiles get `class_mismatch` when the live class differs from the profile declaration.
 
 Exit codes: `0` OK · `2` bad args · `3` window create · `4` renderer · `5` block unverified · `1` other.
 
@@ -231,6 +232,19 @@ GitHub Actions (`.github/workflows/ci.yml`) on push/PR to `master`, and on tags 
 | **GitHub Release** | on `v*` tags only — attaches `fakegame-vX.Y.Z-win-x64.zip` + `…-win-x86.zip` (each zip includes **`fakegame.pdb`**) |
 
 Brace style is **Allman** (`{` / `}` on their own line) with **`} else {`** / **`} else if`** allowed joined. See `CODING_STYLE.md` and `.clang-format`.
+
+**Local format gate (run before every push):** CI pins **Ubuntu clang-format 18.1.3**. Local LLVM 22
+will often green-check while CI fails on `<<` wrapping. Prefer:
+
+```bat
+set PYTHONPATH=
+"%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe" -m pip install "clang-format==18.1.3"
+scripts\format.bat
+scripts\format.bat --check
+```
+
+`format.bat` prefers the PyPI 18.x binary under `site-packages\clang_format\data\bin\` and prints
+the version. Override with `set CLANG_FORMAT=C:\path\to\clang-format.exe`.
 
 ```bat
 scripts\format.bat

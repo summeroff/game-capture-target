@@ -374,25 +374,42 @@ void App::EmitProfileMatchWarnings()
 
   const int mf = cfg_.profileMatchFlags;
 
+  auto emitMismatch = [&](const char* code, const std::string& expected, const std::string& actual,
+                          const char* detail) {
+    std::ostringstream o;
+    o << "{\"event\":\"warning\",\"code\":\"" << code << "\"" << ",\"expected\":\""
+      << JsonEscapeUtf8(expected) << "\"" << ",\"actual\":\"" << JsonEscapeUtf8(actual) << "\""
+      << ",\"profile\":\"" << JsonEscapeUtf8(cfg_.profileId) << "\"" << ",\"detail\":\""
+      << JsonEscapeUtf8(detail) << "\"" << ",\"ts\":\"" << EventsTimestamp() << "\"}";
+    EmitEventJson(o.str());
+    Log("warning: %s expected=%s actual=%s (profile %s)", code, expected.c_str(), actual.c_str(),
+        cfg_.profileId.c_str());
+  };
+
   // EXE-matched profiles need the process image name to match the compatibility entry.
   if ((mf & 1) != 0 && !cfg_.profileExeName.empty())
   {
     const std::string actual = CurrentExeBaseName();
     if (_stricmp(actual.c_str(), cfg_.profileExeName.c_str()) != 0)
     {
-      std::ostringstream o;
-      o << "{\"event\":\"warning\",\"code\":\"exe_mismatch\""
-        << ",\"expected\":\"" << JsonEscapeUtf8(cfg_.profileExeName) << "\""
-        << ",\"actual\":\"" << JsonEscapeUtf8(actual) << "\""
-        << ",\"profile\":\"" << JsonEscapeUtf8(cfg_.profileId) << "\""
-        << ",\"detail\":\""
-        << JsonEscapeUtf8("profile matches on exe; rename the binary (launch.ps1 / spawn-as.ps1) "
-                          "or the compatibility entry will not apply")
-        << "\""
-        << ",\"ts\":\"" << EventsTimestamp() << "\"}";
-      EmitEventJson(o.str());
-      Log("warning: exe_mismatch expected=%s actual=%s (profile %s matches on exe - rename binary)",
-          cfg_.profileExeName.c_str(), actual.c_str(), cfg_.profileId.c_str());
+      emitMismatch("exe_mismatch", cfg_.profileExeName, actual,
+                   "profile matches on exe; rename the binary (launch.ps1 / spawn-as.ps1) "
+                   "or the compatibility entry will not apply");
+    }
+  }
+
+  // Title-matched (often as prefix, e.g. Minecraft "Minecraft 1.21").
+  if ((mf & 2) != 0 && !cfg_.profileExpectedTitle.empty())
+  {
+    const std::wstring& exp = cfg_.profileExpectedTitle;
+    const std::wstring& act = cfg_.title;
+    const bool prefixOk =
+        act.size() >= exp.size() && _wcsnicmp(act.c_str(), exp.c_str(), exp.size()) == 0;
+    if (!prefixOk)
+    {
+      emitMismatch("title_mismatch", Narrow(exp), Narrow(act),
+                   "profile matches on title prefix; set --title to start with the profile title "
+                   "or the compatibility entry will not apply");
     }
   }
 
@@ -401,21 +418,9 @@ void App::EmitProfileMatchWarnings()
   {
     if (_wcsicmp(cfg_.windowClass.c_str(), cfg_.profileExpectedClass.c_str()) != 0)
     {
-      const std::string expected = Narrow(cfg_.profileExpectedClass);
-      const std::string actual = Narrow(cfg_.windowClass);
-      std::ostringstream o;
-      o << "{\"event\":\"warning\",\"code\":\"class_mismatch\""
-        << ",\"expected\":\"" << JsonEscapeUtf8(expected) << "\""
-        << ",\"actual\":\"" << JsonEscapeUtf8(actual) << "\""
-        << ",\"profile\":\"" << JsonEscapeUtf8(cfg_.profileId) << "\""
-        << ",\"detail\":\""
-        << JsonEscapeUtf8("profile matches on window class; class override will not match the "
-                          "compatibility entry")
-        << "\""
-        << ",\"ts\":\"" << EventsTimestamp() << "\"}";
-      EmitEventJson(o.str());
-      Log("warning: class_mismatch expected=%s actual=%s (profile %s matches on class)",
-          expected.c_str(), actual.c_str(), cfg_.profileId.c_str());
+      emitMismatch("class_mismatch", Narrow(cfg_.profileExpectedClass), Narrow(cfg_.windowClass),
+                   "profile matches on window class; class override will not match the "
+                   "compatibility entry");
     }
   }
 }
