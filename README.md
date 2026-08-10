@@ -57,13 +57,15 @@ e2e harnesses that cannot pick from the antd virtualized dropdown.
 ## Capture-refusal modes
 
 Round 1 could show the CS2 compatibility **warning** but still captured successfully. Round 2
-adds real refusal; round 3 silences the OS “Bad Image” spam for signature-policy.
+adds real refusal; round 3 silences the OS “Bad Image” spam for signature-policy. Round 4
+defaults `cs2-blocked` back to **signature-policy** (verified), fixes squat-ipc (dup-mutex +
+empty DACL + self-verify), and adds harness NDJSON events.
 
 | Mode | Flag | Reversible | What it does |
 |------|------|------------|--------------|
 | none | `--block-capture none` | — | Normal capture |
-| signature-policy | `--block-capture signature-policy` | **No** | `SetProcessMitigationPolicy(MicrosoftSignedOnly)` **after** the renderer is fully up. Blocks unsigned `graphics-hook*.dll`. Loader hard-error dialogs suppressed by default (`SetErrorMode`); `--show-block-errors` restores them. |
-| squat-ipc | `--block-capture squat-ipc` | **Yes (F7)** | Pre-creates OBS hook IPC objects (`CaptureHook_*` + pid) with an empty DACL. **Default for `cs2-blocked`** (silent, reversible). |
+| signature-policy | `--block-capture signature-policy` | **No** | `SetProcessMitigationPolicy(MicrosoftSignedOnly)` **after** the renderer is fully up. Blocks unsigned `graphics-hook*.dll`. Loader hard-error dialogs suppressed by default (`SetErrorMode`); `--show-block-errors` restores them. **Default for `cs2-blocked`.** |
+| squat-ipc | `--block-capture squat-ipc` | **Yes (F7)** | Holds `graphics_hook_dup_mutex`+pid (hook DllMain duplicate early-out) + empty-DACL `CaptureHook_*` objects. Self-verifies or exits 5. |
 | unload-hook | `--block-capture unload-hook` | **Yes (F7)** | Polls for `graphics-hook*.dll` and `FreeLibrary`s it |
 
 Also:
@@ -71,6 +73,24 @@ Also:
 - `--block-capture-after <seconds>` — capture works first, then block applies (one-way if signature-policy)
 - `F7` — toggle reversible blocks
 - `--show-block-errors` — keep Windows “Bad Image” dialogs (debug the block mechanism)
+- Every block emits `block_active` with `verified` when `--events json` is on; unverified → exit **5**
+
+## Test-harness events (addendum 4)
+
+```powershell
+.\build\bin\fakegame.exe --profile cs2 --events json --ready-file ready.json --exit-after 5
+```
+
+| Flag | Notes |
+|------|-------|
+| `--events json` | NDJSON on **stdout** (`ready`, `block_active`, `hook_attempt` / `hooked` / `hook_blocked`); human logs on **stderr** |
+| `--ready-file <path>` | Writes the `ready` object (same fields) for harnesses that cannot read stdout |
+| `--instance <id>` | Disambiguate concurrent runs: suffix on **class** (exe-matched) or **title** (class-matched) |
+
+`ready` includes app-owned `obsWindowSetting` (`title:class:exe` with `#`→`#22`, `:`→`#3A`),
+`clientWidth` / `clientHeight`, `hwnd`, `pid`, `blockCapture`, `captureExpected`.
+
+Exit codes: `0` OK · `2` bad args · `3` window create · `4` renderer · `5` block unverified · `1` other.
 
 ## Graphics APIs
 
@@ -89,7 +109,7 @@ truth: `fakegame.exe --list-profiles --json` (consumed by `launch.ps1` — no du
 | Profile | exe | Match | Sev | Capture expected |
 |---------|-----|-------|-----|------------------|
 | cs2 | cs2.exe | exe | Warning | yes |
-| cs2-blocked | cs2.exe | exe | Warning | **NO** (default: squat-ipc) |
+| cs2-blocked | cs2.exe | exe | Warning | **NO** (default: signature-policy) |
 | minecraft | javaw.exe | exe+title | Normal | yes |
 | wuthering | Client-Win64-Shipping.exe | exe+title | Warning | yes |
 | destiny2 | destiny2.exe | exe | Error | yes |
@@ -130,6 +150,9 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--block-capture` | none | none \| signature-policy \| squat-ipc \| unload-hook |
 | `--block-capture-after` | 0 | seconds |
 | `--show-block-errors` | off | allow Windows loader hard-error dialogs |
+| `--events json` | off | NDJSON on stdout; Log → stderr |
+| `--ready-file <path>` | — | write `ready` JSON for harnesses |
+| `--instance <id>` | — | disambiguate concurrent runs |
 | `--version` / `-V` | — | print version (`X.Y.Z+gSHA` or `0.0.0-dev+gSHA`) and exit |
 
 ## Scenes (visual stress patterns)
@@ -162,7 +185,7 @@ GDI approximates motion only.
 | F7 | Toggle reversible capture block |
 | Esc | Quit |
 
-Every transition is logged to stdout with a timestamp.
+Every transition is logged (stdout, or stderr when `--events json`).
 
 ## Low-level rename helper
 
@@ -170,7 +193,8 @@ Every transition is logged to stdout with a timestamp.
 .\tools\spawn-as.ps1 -As cs2.exe -GameArgs '--title "Counter-Strike 2"'
 ```
 
-Prefer `launch.ps1` for profile-aware QA.
+Prefer `launch.ps1` for profile-aware QA. `-Json` launches with `--events json` + `--ready-file`
+and prefers the app `ready` object (including `obsWindowSetting`) over re-encoding in PowerShell.
 
 ## Acceptance (app-side, verified in build)
 
@@ -178,8 +202,11 @@ Prefer `launch.ps1` for profile-aware QA.
 |---|-------|--------|
 | 1 | x64 Release `/W4` | green |
 | 2 | rename → `cs2.exe` alone | no missing DLL (static CRT) |
-| 9 | signature-policy applies after D3D | log: `signature-policy APPLIED` |
-| — | squat-ipc creates deny DACL objects | log lists CaptureHook_*+pid |
+| 9 | signature-policy applies after D3D | log + `block_active.verified` |
+| 26 | cs2-blocked default signature-policy | list-profiles + smoke |
+| 27 | `--events json` ready + obsWindowSetting | smoke |
+| 29 | block self-verify or exit 5 | squat + signature smoke |
+| — | squat-ipc dup-mutex + deny DACL | verify CreateEvent ACCESS_DENIED |
 | — | `--api d3d12` | device + swapchain ok |
 | — | `--api vulkan` | device + swapchain ok |
 | — | `launch.ps1 -Profile cs2 -Json` | pid/hwnd/obsWindowSetting |
@@ -252,7 +279,7 @@ scripts/format.bat format.sh  ci-smoke.ps1
 tools/launch.ps1   spawn-as.ps1
 third_party/Vulkan-Headers/   # vendored Khronos headers
 src/
-  main.cpp app.* config.* profiles.* block_capture.*
+  main.cpp app.* config.* profiles.* block_capture.* events.* exit_codes.hpp
   scene/   # aurora + orbital + highway draw-list sims
   d3d11_renderer.cpp d3d12_renderer.cpp vulkan_renderer.cpp none_renderer.cpp
   renderer.hpp font8x8.hpp log.hpp

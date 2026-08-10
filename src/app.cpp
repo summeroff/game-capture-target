@@ -1,9 +1,12 @@
 #include "app.hpp"
 
 #include "block_capture.hpp"
+#include "events.hpp"
 #include "log.hpp"
 
 #include <cmath>
+#include <sstream>
+
 #include <dwmapi.h>
 
 #include "resource.h"
@@ -77,11 +80,20 @@ App* App::FromHwnd(HWND hwnd)
 bool App::Initialize(std::wstring* error)
 {
   if (!RegisterWindowClass(error))
+  {
+    exitCode_ = FgExit::WindowCreateFailed;
     return false;
+  }
   if (!CreateMainWindow(error))
+  {
+    exitCode_ = FgExit::WindowCreateFailed;
     return false;
+  }
   if (!CreateRenderer(error))
+  {
+    exitCode_ = FgExit::RendererInitFailed;
     return false;
+  }
   InitScene();
 
   // Capture block AFTER renderer is fully up (signature-policy needs driver UMDs loaded).
@@ -95,7 +107,10 @@ bool App::Initialize(std::wstring* error)
     } else
     {
       if (!ApplyBlockNow(error))
+      {
+        exitCode_ = FgExit::BlockUnverified;
         return false;
+      }
     }
   }
 
@@ -117,6 +132,8 @@ bool App::Initialize(std::wstring* error)
 
   Log("app: hwnd=%p pid=%lu class=%s", hwnd_, GetCurrentProcessId(),
       Narrow(cfg_.windowClass).c_str());
+
+  EmitReady();
   return true;
 }
 
@@ -229,22 +246,70 @@ void App::InitScene()
 
 bool App::ApplyBlockNow(std::wstring* error)
 {
+  const std::string modeStr = Narrow(BlockCaptureModeName(cfg_.blockCapture));
+
   switch (cfg_.blockCapture)
   {
   case BlockCaptureMode::None:
     return true;
   case BlockCaptureMode::SignaturePolicy:
     if (!ApplySignaturePolicy(error))
+    {
+      const std::string det = error ? Narrow(*error) : std::string("apply failed");
+      EmitBlockActive(modeStr.c_str(), false, det.c_str());
       return false;
+    }
+    if (!VerifySignaturePolicy())
+    {
+      if (error)
+        *error = L"signature-policy applied but GetProcessMitigationPolicy verify failed";
+      EmitBlockActive(modeStr.c_str(), false, "verify failed");
+      return false;
+    }
     blockActive_ = true;
     cfg_.captureExpected = false;
+    EmitBlockActive(modeStr.c_str(), true, "MicrosoftSignedOnly=1");
+    if (!hookBlockedEmitted_)
+    {
+      hookBlockedEmitted_ = true;
+      std::ostringstream o;
+      o << "{\"event\":\"hook_blocked\",\"reason\":\"signature-policy\",\"ts\":\""
+        << EventsTimestamp() << "\"}";
+      EmitEventJson(o.str());
+    }
     return true;
   case BlockCaptureMode::SquatIpc:
     if (!ApplySquatIpc(error))
+    {
+      const std::string det = error ? Narrow(*error) : std::string("apply failed");
+      EmitBlockActive(modeStr.c_str(), false, det.c_str());
       return false;
-    blockActive_ = true;
-    reversibleMode_ = BlockCaptureMode::SquatIpc;
-    cfg_.captureExpected = false;
+    }
+    {
+      std::wstring detail;
+      if (!VerifySquatIpc(&detail))
+      {
+        if (error)
+          *error = L"squat-ipc verify failed: " + detail;
+        const std::string det = Narrow(detail);
+        EmitBlockActive(modeStr.c_str(), false, det.c_str());
+        ReleaseSquatIpc();
+        return false;
+      }
+      blockActive_ = true;
+      reversibleMode_ = BlockCaptureMode::SquatIpc;
+      cfg_.captureExpected = false;
+      const std::string det = Narrow(detail);
+      EmitBlockActive(modeStr.c_str(), true, det.c_str());
+      if (!hookBlockedEmitted_)
+      {
+        hookBlockedEmitted_ = true;
+        std::ostringstream o;
+        o << "{\"event\":\"hook_blocked\",\"reason\":\"squat-ipc\",\"ts\":\"" << EventsTimestamp()
+          << "\"}";
+        EmitEventJson(o.str());
+      }
+    }
     return true;
   case BlockCaptureMode::UnloadHook:
     unloadHookArmed_ = true;
@@ -252,9 +317,66 @@ bool App::ApplyBlockNow(std::wstring* error)
     reversibleMode_ = BlockCaptureMode::UnloadHook;
     cfg_.captureExpected = false;
     Log("block: unload-hook ARMED (will FreeLibrary graphics-hook*.dll when seen)");
+    EmitBlockActive(modeStr.c_str(), true, "armed");
     return true;
   }
   return true;
+}
+
+void App::EmitBlockActive(const char* mode, bool verified, const char* detail)
+{
+  std::ostringstream o;
+  o << "{\"event\":\"block_active\",\"mode\":\"" << JsonEscapeUtf8(mode ? mode : "")
+    << "\",\"verified\":" << (verified ? "true" : "false") << ",\"ts\":\"" << EventsTimestamp()
+    << "\"";
+  if (detail && *detail)
+    o << ",\"detail\":\"" << JsonEscapeUtf8(detail) << "\"";
+  o << "}";
+  EmitEventJson(o.str());
+  Log("block_active: mode=%s verified=%s %s", mode ? mode : "?", verified ? "true" : "false",
+      detail ? detail : "");
+}
+
+void App::EmitReady()
+{
+  if (readyEmitted_ || !hwnd_)
+    return;
+  readyEmitted_ = true;
+
+  int cw = 0, ch = 0;
+  ClientSize(&cw, &ch);
+  if (cw <= 0)
+    cw = cfg_.width;
+  if (ch <= 0)
+    ch = cfg_.height;
+
+  const std::string exe = CurrentExeBaseName();
+  const std::string title = Narrow(cfg_.title);
+  const std::string cls = Narrow(cfg_.windowClass);
+  const std::string obs = BuildObsWindowSetting(title, cls, exe);
+  const std::string api = Narrow(GraphicsApiName(cfg_.api));
+  const std::string block = Narrow(BlockCaptureModeName(cfg_.blockCapture));
+
+  std::ostringstream o;
+  o << "{\"event\":\"ready\""
+    << ",\"pid\":" << GetCurrentProcessId() << ",\"hwnd\":\"" << FormatHwnd(hwnd_) << "\""
+    << ",\"exe\":\"" << JsonEscapeUtf8(exe) << "\""
+    << ",\"windowClass\":\"" << JsonEscapeUtf8(cls) << "\""
+    << ",\"windowTitle\":\"" << JsonEscapeUtf8(title) << "\""
+    << ",\"clientWidth\":" << cw << ",\"clientHeight\":" << ch << ",\"api\":\""
+    << JsonEscapeUtf8(api) << "\""
+    << ",\"blockCapture\":\"" << JsonEscapeUtf8(block) << "\""
+    << ",\"captureExpected\":" << (cfg_.captureExpected ? "true" : "false")
+    << ",\"obsWindowSetting\":\"" << JsonEscapeUtf8(obs) << "\"";
+  if (!cfg_.profileId.empty())
+    o << ",\"profile\":\"" << JsonEscapeUtf8(cfg_.profileId) << "\"";
+  if (!cfg_.instanceId.empty())
+    o << ",\"instance\":\"" << JsonEscapeUtf8(Narrow(cfg_.instanceId)) << "\"";
+  o << ",\"ts\":\"" << EventsTimestamp() << "\"}";
+  EmitEventJson(o.str());
+  // Always log human-readable ready line for non-events consumers / correlation.
+  Log("ready: hwnd=%s pid=%lu obsWindowSetting=%s client=%dx%d", FormatHwnd(hwnd_).c_str(),
+      GetCurrentProcessId(), obs.c_str(), cw, ch);
 }
 
 void App::LiftReversibleBlock()
@@ -267,7 +389,53 @@ void App::LiftReversibleBlock()
   blockActive_ = false;
   reversibleMode_ = BlockCaptureMode::None;
   cfg_.captureExpected = true;
+  hookBlockedEmitted_ = false;
+  hookedEmitted_ = false;
   Log("block: reversible block LIFTED — capture may succeed again");
+}
+
+void App::TickHookEvents()
+{
+  const HookModuleState st = QueryHookModule();
+  if (st.present && !hookPresent_)
+  {
+    hookPresent_ = true;
+    std::ostringstream o;
+    o << "{\"event\":\"hook_attempt\",\"module\":\"" << JsonEscapeUtf8(st.baseName)
+      << "\",\"ts\":\"" << EventsTimestamp() << "\"}";
+    EmitEventJson(o.str());
+    Log("hook_attempt: %s", st.baseName.c_str());
+
+    if (blockActive_ && reversibleMode_ == BlockCaptureMode::UnloadHook)
+    {
+      // Will unload below in TickBlockCapture; blocked event on unload.
+    } else if (blockActive_ && (cfg_.blockCapture == BlockCaptureMode::SignaturePolicy ||
+                                reversibleMode_ == BlockCaptureMode::SquatIpc))
+    {
+      // Unexpected: block should prevent stable load. Still report attempt.
+      if (!hookBlockedEmitted_)
+      {
+        hookBlockedEmitted_ = true;
+        std::ostringstream b;
+        b << "{\"event\":\"hook_blocked\",\"reason\":\""
+          << JsonEscapeUtf8(Narrow(BlockCaptureModeName(cfg_.blockCapture))) << "\",\"ts\":\""
+          << EventsTimestamp() << "\"}";
+        EmitEventJson(b.str());
+      }
+    } else if (!blockActive_ && !hookedEmitted_)
+    {
+      hookedEmitted_ = true;
+      std::ostringstream h;
+      h << "{\"event\":\"hooked\",\"module\":\"" << JsonEscapeUtf8(st.baseName) << "\",\"ts\":\""
+        << EventsTimestamp() << "\"}";
+      EmitEventJson(h.str());
+      Log("hooked: %s", st.baseName.c_str());
+    }
+  } else if (!st.present && hookPresent_)
+  {
+    hookPresent_ = false;
+    hookedEmitted_ = false;
+  }
 }
 
 void App::TickBlockCapture()
@@ -280,15 +448,28 @@ void App::TickBlockCapture()
     Log("block: block-capture-after %d reached — applying %s", cfg_.blockCaptureAfterSeconds,
         Narrow(BlockCaptureModeName(cfg_.blockCapture)).c_str());
     if (!ApplyBlockNow(&err))
+    {
       Log("block: apply failed: %s", Narrow(err).c_str());
+      exitCode_ = FgExit::BlockUnverified;
+      RequestQuit();
+      return;
+    }
   }
 
   PollHookModules(true);
+  TickHookEvents();
 
   if (unloadHookArmed_)
   {
     if (TryUnloadGraphicsHook())
     {
+      std::ostringstream o;
+      o << "{\"event\":\"hook_blocked\",\"reason\":\"unload-hook\",\"ts\":\"" << EventsTimestamp()
+        << "\"}";
+      EmitEventJson(o.str());
+      hookBlockedEmitted_ = true;
+      hookPresent_ = false;
+      hookedEmitted_ = false;
       // keep armed — OBS will reinject
     }
   }
@@ -431,7 +612,7 @@ int App::Run()
 
     Frame();
   }
-  return 0;
+  return static_cast<int>(exitCode_);
 }
 
 void App::RequestQuit()

@@ -5,8 +5,10 @@
 .EXAMPLE
   .\tools\launch.ps1
   .\tools\launch.ps1 -Profile cs2 -Api d3d11 -BlockCapture signature-policy -Json
+  .\tools\launch.ps1 -Profile cs2-blocked -Json
   .\tools\launch.ps1 -List -Json
   .\tools\launch.ps1 -StopAll
+  .\tools\launch.ps1 -Profile cs2 -Instance a -Json
 #>
 [CmdletBinding()]
 param(
@@ -18,6 +20,7 @@ param(
   [int] $ExitAfter = 0,
   [string] $Title,
   [string] $Class,
+  [string] $Instance,
   [string] $Source,
   [switch] $List,
   [switch] $Json,
@@ -48,10 +51,10 @@ function Get-ProfilesJson {
   $lines = & $Exe --list-profiles --json 2>&1
   if ($LASTEXITCODE -ne 0) { throw "fakegame --list-profiles --json failed: $lines" }
   # Do NOT use Out-String — it pad-wraps and corrupts JSON.
-  $text = ($lines | ForEach-Object { "$_" }) -join "`n"
-  $parsed = $text.Trim() | ConvertFrom-Json
-  # PS5 may return a single object for 1-element arrays; always normalize to array.
-  return @($parsed)
+  $text = (($lines | ForEach-Object { "$_" }) -join "`n").Trim()
+  # PS 5.1: wrap array so ConvertFrom-Json does not collapse object arrays.
+  $parsed = ConvertFrom-Json -InputObject ('{"items":' + $text + '}')
+  return @($parsed.items)
 }
 
 function Encode-ObsPart([string]$s) {
@@ -150,6 +153,27 @@ public struct RECT { public int L,T,R,B; }
   return $null
 }
 
+function Wait-ReadyFile {
+  param([string]$Path, [int]$TimeoutSec, [int]$ProcessId)
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path -LiteralPath $Path) {
+      try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ($raw -and $raw.Trim().Length -gt 0) {
+          return ($raw.Trim() | ConvertFrom-Json)
+        }
+      } catch {
+        # partial write — retry
+      }
+    }
+    $alive = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $alive) { return $null }
+    Start-Sleep -Milliseconds 50
+  }
+  return $null
+}
+
 if ($StopAll) {
   Stop-AllSpawned
   exit 0
@@ -164,7 +188,7 @@ if ($List) {
     & $exe --list-profiles --json
     exit $LASTEXITCODE
   }
-  $profiles | Format-Table id, match, severityName, captureExpected, defaultBlock, notes -AutoSize
+  $profiles | Format-Table id, match, severityName, captureExpected, defaultBlock, clientWidth, clientHeight, notes -AutoSize
   exit 0
 }
 
@@ -217,15 +241,27 @@ if (-not $BlockCapture) {
 $exeName = if ($p.exe) { $p.exe } else { 'fakegame.exe' }
 if (-not $exeName.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase)) { $exeName += '.exe' }
 
-$outDir = Join-Path $spawnRoot ([string]$p.id)
+$spawnKey = [string]$p.id
+if ($Instance) { $spawnKey = "$($p.id)_$Instance" }
+$outDir = Join-Path $spawnRoot $spawnKey
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $dest = Join-Path $outDir ([string]$exeName)
 Copy-Item -LiteralPath $exe -Destination $dest -Force
 
-$argList = @("--profile", ([string]$p.id), "--api", $Api, "--block-capture", $BlockCapture)
+$readyPath = Join-Path $outDir 'ready.json'
+if (Test-Path -LiteralPath $readyPath) { Remove-Item -LiteralPath $readyPath -Force }
+
+$argList = @(
+  "--profile", ([string]$p.id),
+  "--api", $Api,
+  "--block-capture", $BlockCapture,
+  "--events", "json",
+  "--ready-file", $readyPath
+)
 if ($ExitAfter -gt 0) { $argList += @('--exit-after', "$ExitAfter") }
 if ($Title) { $argList += @('--title', $Title) }
 if ($Class) { $argList += @('--class', $Class) }
+if ($Instance) { $argList += @('--instance', $Instance) }
 
 $cmdDisplay = "`"$dest`" " + ($argList | ForEach-Object {
   if ($_ -match '\s') { "'$_'" } else { $_ }
@@ -235,7 +271,11 @@ if (-not $Json) {
   Write-Host "launch: $cmdDisplay"
 }
 
-$proc = Start-Process -FilePath $dest -ArgumentList $argList -WorkingDirectory $outDir -PassThru
+# Redirect stdout (NDJSON) / stderr (human log) into spawn dir for debugging.
+$stdoutLog = Join-Path $outDir 'stdout.ndjson'
+$stderrLog = Join-Path $outDir 'stderr.log'
+$proc = Start-Process -FilePath $dest -ArgumentList $argList -WorkingDirectory $outDir -PassThru `
+  -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
 if (-not $proc) { throw "Start-Process failed" }
 
 # Fail fast if process dies immediately
@@ -243,47 +283,100 @@ Start-Sleep -Milliseconds 400
 $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
 if (-not $alive) {
   Write-Error "process exited immediately (pid $($proc.Id)). This is the silent-death case the tool exists to catch."
+  if (Test-Path $stderrLog) { Get-Content $stderrLog | Write-Host }
   exit 3
 }
 
-$classHint = if ($Class) { $Class } elseif ($p.windowClass) { $p.windowClass } else { $null }
-$win = Wait-ProcessWindow -ProcessId $proc.Id -TimeoutSec $WaitSeconds -ClassHint $classHint
-if (-not $win) {
-  # still alive but no window?
-  $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
-  if (-not $alive) {
-    Write-Error "process exited before window appeared (pid $($proc.Id))"
-    exit 4
-  }
-  Write-Error "timed out waiting for window (pid $($proc.Id), ${WaitSeconds}s)"
-  exit 5
+# Prefer app-owned ready JSON (obsWindowSetting computed once in the exe).
+$ready = Wait-ReadyFile -Path $readyPath -TimeoutSec $WaitSeconds -ProcessId $proc.Id
+
+# Fallback: window enum if ready file missing (older builds).
+$classHint = $null
+if ($ready -and $ready.windowClass) {
+  $classHint = [string]$ready.windowClass
+} elseif ($Class) {
+  $classHint = $Class
+} elseif ($Instance -and $p.match -ne 'class') {
+  # exe-matched: app appends _instance to class
+  $baseClass = if ($p.windowClass) { [string]$p.windowClass } else { 'FakeGameWindowClass' }
+  $classHint = "${baseClass}_$Instance"
+} elseif ($p.windowClass) {
+  $classHint = [string]$p.windowClass
 }
 
-$titleOut = if ($win.Title) { $win.Title } elseif ($Title) { $Title } else { $p.windowTitle }
-$classOut = if ($win.Class) { $win.Class } elseif ($Class) { $Class } else { $p.windowClass }
-$obs = Get-ObsWindowSetting -title $titleOut -cls $classOut -exeName $exeName
-$captureExpected = if ($BlockCapture -eq 'none') { [bool]$p.captureExpected } else { $false }
+if (-not $ready) {
+  $win = Wait-ProcessWindow -ProcessId $proc.Id -TimeoutSec 2 -ClassHint $classHint
+  if (-not $win) {
+    $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+    if (-not $alive) {
+      Write-Error "process exited before ready/window (pid $($proc.Id))"
+      if (Test-Path $stderrLog) { Get-Content $stderrLog | Write-Host }
+      exit 4
+    }
+    Write-Error "timed out waiting for ready event/window (pid $($proc.Id), ${WaitSeconds}s)"
+    if (Test-Path $stderrLog) { Get-Content $stderrLog | Select-Object -Last 40 | Write-Host }
+    exit 5
+  }
+  $titleOut = if ($win.Title) { $win.Title } elseif ($Title) { $Title } else { $p.windowTitle }
+  $classOut = if ($win.Class) { $win.Class } elseif ($Class) { $Class } else { $p.windowClass }
+  $obs = Get-ObsWindowSetting -title $titleOut -cls $classOut -exeName $exeName
+  $captureExpected = if ($BlockCapture -eq 'none') { [bool]$p.captureExpected } else { $false }
+  $result = [ordered]@{
+    profile           = $p.id
+    pid               = $proc.Id
+    hwnd              = ('0x{0:X8}' -f $win.Hwnd.ToInt64())
+    exePath           = $dest
+    exeName           = $exeName
+    windowClass       = $classOut
+    windowTitle       = $titleOut
+    api               = $Api
+    blockCapture      = $BlockCapture
+    obsWindowSetting  = $obs
+    captureExpected   = $captureExpected
+    clientWidth       = if ($p.clientWidth) { [int]$p.clientWidth } else { 1280 }
+    clientHeight      = if ($p.clientHeight) { [int]$p.clientHeight } else { 720 }
+  }
+} else {
+  $captureExpected = if ($null -ne $ready.captureExpected) {
+    [bool]$ready.captureExpected
+  } elseif ($BlockCapture -eq 'none') {
+    [bool]$p.captureExpected
+  } else {
+    $false
+  }
+  $result = [ordered]@{
+    profile           = if ($ready.profile) { $ready.profile } else { $p.id }
+    pid               = if ($ready.pid) { [int]$ready.pid } else { $proc.Id }
+    hwnd              = if ($ready.hwnd) { [string]$ready.hwnd } else { '' }
+    exePath           = $dest
+    exeName           = if ($ready.exe) { [string]$ready.exe } else { $exeName }
+    windowClass       = if ($ready.windowClass) { [string]$ready.windowClass } else { '' }
+    windowTitle       = if ($ready.windowTitle) { [string]$ready.windowTitle } else { '' }
+    api               = if ($ready.api) { [string]$ready.api } else { $Api }
+    blockCapture      = if ($ready.blockCapture) { [string]$ready.blockCapture } else { $BlockCapture }
+    obsWindowSetting  = if ($ready.obsWindowSetting) { [string]$ready.obsWindowSetting } else { '' }
+    captureExpected   = $captureExpected
+    clientWidth       = if ($ready.clientWidth) { [int]$ready.clientWidth } else { 1280 }
+    clientHeight      = if ($ready.clientHeight) { [int]$ready.clientHeight } else { 720 }
+  }
+  if ($Instance) { $result.instance = $Instance }
+  if ($ready.instance) { $result.instance = [string]$ready.instance }
+}
 
-$result = [ordered]@{
-  profile           = $p.id
-  pid               = $proc.Id
-  hwnd              = ('0x{0:X8}' -f $win.Hwnd.ToInt64())
-  exePath           = $dest
-  exeName           = $exeName
-  windowClass       = $classOut
-  windowTitle       = $titleOut
-  api               = $Api
-  blockCapture      = $BlockCapture
-  obsWindowSetting  = $obs
-  captureExpected   = $captureExpected
+# Still alive?
+$alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+if (-not $alive) {
+  Write-Error "process exited after ready (pid $($proc.Id)) - check block verify / stderr.log"
+  if (Test-Path $stderrLog) { Get-Content $stderrLog | Select-Object -Last 40 | Write-Host }
+  exit 6
 }
 
 if ($Json) {
   $result | ConvertTo-Json -Compress
 } else {
-  Write-Host "pid=$($result.pid) hwnd=$($result.hwnd)"
-  Write-Host "obsWindowSetting=$($result.obsWindowSetting)"
-  Write-Host "captureExpected=$($result.captureExpected)"
+  Write-Host ("pid={0} hwnd={1}" -f $result.pid, $result.hwnd)
+  Write-Host ("obsWindowSetting={0}" -f $result.obsWindowSetting)
+  Write-Host ("captureExpected={0} block={1}" -f $result.captureExpected, $result.blockCapture)
 }
 
 exit 0

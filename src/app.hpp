@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "exit_codes.hpp"
 #include "renderer.hpp"
 #include "scene/scene.hpp"
 
@@ -20,6 +21,8 @@ public:
 
   bool Initialize(std::wstring* error);
   int Run();
+
+  FgExit LastExit() const { return exitCode_; }
 
   static App* FromHwnd(HWND hwnd);
 
@@ -48,6 +51,9 @@ private:
   void TickBlockCapture();
   bool ApplyBlockNow(std::wstring* error);
   void LiftReversibleBlock();
+  void EmitBlockActive(const char* mode, bool verified, const char* detail);
+  void EmitReady();
+  void TickHookEvents();
   void Frame();
   void RequestQuit();
 
@@ -69,6 +75,12 @@ private:
   bool blockPending_ = false;
   bool unloadHookArmed_ = false;
   BlockCaptureMode reversibleMode_ = BlockCaptureMode::None;
+  bool readyEmitted_ = false;
+  bool hookPresent_ = false;
+  bool hookedEmitted_ = false;
+  bool hookBlockedEmitted_ = false;
+
+  FgExit exitCode_ = FgExit::Ok;
 
   uint64_t frameIndex_ = 0;
   double elapsedSec_ = 0.0;

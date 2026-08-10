@@ -7,13 +7,15 @@
 
 #include <aclapi.h>
 #include <psapi.h>
-#include <tlhelp32.h>
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "psapi.lib")
 
 namespace
 {
+
+// OBS graphics-hook DllMain duplicate guard (graphics-hook.c HOOK_NAME).
+const wchar_t* kDupMutexBase = L"graphics_hook_dup_mutex";
 
 const wchar_t* kEventBases[] = {
     L"CaptureHook_Restart", L"CaptureHook_Stop",       L"CaptureHook_HookReady",
@@ -30,16 +32,16 @@ const wchar_t* kMapBases[] = {
 };
 
 std::vector<HANDLE> g_squatHandles;
+HANDLE g_dupMutex = nullptr;
 bool g_squatActive = false;
 
-// Empty DACL => deny all subsequent Open/Create by other callers (incl. injected hook).
+// Empty DACL => deny all subsequent Open/Create by name (incl. injected hook, same process).
 bool MakeDenyAllSa(SECURITY_ATTRIBUTES* sa, SECURITY_DESCRIPTOR* sd, PACL* aclOut)
 {
   *aclOut = nullptr;
   if (!InitializeSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION))
     return false;
 
-  //  sizeof(ACL) is enough for an empty ACL.
   const DWORD aclSize = sizeof(ACL);
   PACL acl = static_cast<PACL>(LocalAlloc(LPTR, aclSize));
   if (!acl)
@@ -126,39 +128,76 @@ bool ApplySignaturePolicy(std::wstring* error)
   return true;
 }
 
+bool VerifySignaturePolicy()
+{
+  PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy{};
+  if (!GetProcessMitigationPolicy(GetCurrentProcess(), ProcessSignaturePolicy, &policy,
+                                  sizeof(policy)))
+  {
+    Log("block: signature-policy verify GetProcessMitigationPolicy failed err=%lu", GetLastError());
+    return false;
+  }
+  const bool ok = policy.MicrosoftSignedOnly == 1;
+  Log("block: signature-policy verify MicrosoftSignedOnly=%u => %s", policy.MicrosoftSignedOnly,
+      ok ? "OK" : "FAIL");
+  return ok;
+}
+
 bool ApplySquatIpc(std::wstring* error)
 {
   if (g_squatActive)
     return true;
 
-  SECURITY_DESCRIPTOR sd{};
-  SECURITY_ATTRIBUTES sa{};
-  PACL acl = nullptr;
-  if (!MakeDenyAllSa(&sa, &sd, &acl))
-  {
-    *error = L"failed to build deny-all SECURITY_ATTRIBUTES";
-    return false;
-  }
-
   std::vector<HANDLE> created;
+
   auto fail = [&](const wchar_t* what) -> bool {
     Log("block: squat-ipc create failed for %s err=%lu", Narrow(what).c_str(), GetLastError());
     for (HANDLE h : created)
       if (h)
         CloseHandle(h);
-    if (acl)
-      LocalFree(acl);
+    if (g_dupMutex)
+    {
+      CloseHandle(g_dupMutex);
+      g_dupMutex = nullptr;
+    }
     *error = std::wstring(L"squat-ipc failed creating ") + what;
     return false;
   };
 
   wchar_t name[128];
+
+  // (1) Duplicate-hook mutex — OBS graphics-hook DllMain:
+  //     open_mutex(graphics_hook_dup_mutex+pid) succeeds → refuse load as duplicate.
+  // Default DACL so OpenMutex from the injected DLL succeeds (empty DACL would make Open fail
+  // and the hook would try CreateMutex instead).
+  NameWithPid(name, _countof(name), kDupMutexBase);
+  g_dupMutex = CreateMutexW(nullptr, FALSE, name);
+  if (!g_dupMutex)
+    return fail(name);
+  Log("block: squat-ipc dup-mutex %s (hook DllMain early-out)", Narrow(name).c_str());
+
+  // (2) Empty-DACL CaptureHook_* objects — defense in depth for init_signals / create_hook_info.
+  SECURITY_DESCRIPTOR sd{};
+  SECURITY_ATTRIBUTES sa{};
+  PACL acl = nullptr;
+  if (!MakeDenyAllSa(&sa, &sd, &acl))
+  {
+    CloseHandle(g_dupMutex);
+    g_dupMutex = nullptr;
+    *error = L"failed to build deny-all SECURITY_ATTRIBUTES";
+    return false;
+  }
+
   for (const wchar_t* base : kEventBases)
   {
     NameWithPid(name, _countof(name), base);
     HANDLE h = CreateEventW(&sa, FALSE, FALSE, name);
     if (!h)
+    {
+      if (acl)
+        LocalFree(acl);
       return fail(name);
+    }
     created.push_back(h);
     Log("block: squat-ipc event %s", Narrow(name).c_str());
   }
@@ -167,7 +206,11 @@ bool ApplySquatIpc(std::wstring* error)
     NameWithPid(name, _countof(name), base);
     HANDLE h = CreateMutexW(&sa, FALSE, name);
     if (!h)
+    {
+      if (acl)
+        LocalFree(acl);
       return fail(name);
+    }
     created.push_back(h);
     Log("block: squat-ipc mutex %s", Narrow(name).c_str());
   }
@@ -176,7 +219,11 @@ bool ApplySquatIpc(std::wstring* error)
     NameWithPid(name, _countof(name), base);
     HANDLE h = CreateFileMappingW(INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE, 0, 4096, name);
     if (!h)
+    {
+      if (acl)
+        LocalFree(acl);
       return fail(name);
+    }
     created.push_back(h);
     Log("block: squat-ipc mapping %s", Narrow(name).c_str());
   }
@@ -185,13 +232,13 @@ bool ApplySquatIpc(std::wstring* error)
   g_squatActive = true;
   if (acl)
     LocalFree(acl);
-  Log("block: squat-ipc APPLIED (empty DACL on hook IPC objects)");
+  Log("block: squat-ipc APPLIED (dup-mutex + empty DACL CaptureHook_*)");
   return true;
 }
 
 void ReleaseSquatIpc()
 {
-  if (!g_squatActive)
+  if (!g_squatActive && !g_dupMutex)
     return;
   for (HANDLE h : g_squatHandles)
   {
@@ -199,6 +246,11 @@ void ReleaseSquatIpc()
       CloseHandle(h);
   }
   g_squatHandles.clear();
+  if (g_dupMutex)
+  {
+    CloseHandle(g_dupMutex);
+    g_dupMutex = nullptr;
+  }
   g_squatActive = false;
   Log("block: squat-ipc RELEASED");
 }
@@ -206,6 +258,71 @@ void ReleaseSquatIpc()
 bool IsSquatIpcActive()
 {
   return g_squatActive;
+}
+
+bool VerifySquatIpc(std::wstring* detail)
+{
+  if (!g_squatActive || !g_dupMutex)
+  {
+    if (detail)
+      *detail = L"squat not active";
+    return false;
+  }
+
+  wchar_t name[128];
+
+  // Dup mutex must be openable (hook takes duplicate path).
+  NameWithPid(name, _countof(name), kDupMutexBase);
+  HANDLE hOpen = OpenMutexW(SYNCHRONIZE, FALSE, name);
+  if (!hOpen)
+  {
+    if (detail)
+      *detail = L"dup-mutex OpenMutex failed (hook would not see duplicate)";
+    Log("block: squat-ipc verify FAIL dup-mutex open err=%lu", GetLastError());
+    return false;
+  }
+  CloseHandle(hOpen);
+
+  // CaptureHook events: subsequent CreateEvent (what the hook does) must be denied.
+  NameWithPid(name, _countof(name), kEventBases[0]);
+  SetLastError(0);
+  HANDLE hCreate = CreateEventW(nullptr, FALSE, FALSE, name);
+  const DWORD err = GetLastError();
+  if (hCreate)
+  {
+    // Got a handle — either we received the existing object (bad: access allowed) or created new
+    // (bad: our squat handle was lost). Either way, hook init could proceed.
+    CloseHandle(hCreate);
+    if (err == ERROR_ALREADY_EXISTS)
+    {
+      if (detail)
+        *detail = L"CreateEvent on squatted name succeeded (DACL did not deny)";
+      Log("block: squat-ipc verify FAIL CreateEvent allowed on %s", Narrow(name).c_str());
+      return false;
+    }
+  } else if (err != ERROR_ACCESS_DENIED)
+  {
+    if (detail)
+      *detail = L"CreateEvent failed with unexpected error " + std::to_wstring(err);
+    Log("block: squat-ipc verify FAIL CreateEvent err=%lu (want ACCESS_DENIED)", err);
+    return false;
+  }
+
+  // OpenEvent should also deny.
+  HANDLE hEv = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name);
+  if (hEv)
+  {
+    CloseHandle(hEv);
+    if (detail)
+      *detail = L"OpenEvent on squatted name succeeded";
+    Log("block: squat-ipc verify FAIL OpenEvent allowed on %s", Narrow(name).c_str());
+    return false;
+  }
+
+  if (detail)
+    *detail = L"dup-mutex held; CaptureHook Create/Open denied";
+  Log("block: squat-ipc verify OK (%s)", detail ? Narrow(*detail).c_str() : "ok");
+  return true;
 }
 
 bool TryUnloadGraphicsHook()
@@ -239,15 +356,14 @@ bool TryUnloadGraphicsHook()
   return unloaded;
 }
 
-void PollHookModules(bool logAttempts)
+HookModuleState QueryHookModule()
 {
-  static bool s_seen = false;
+  HookModuleState st;
   HMODULE mods[512];
   DWORD needed = 0;
   if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed))
-    return;
+    return st;
 
-  bool present = false;
   const unsigned count = needed / sizeof(HMODULE);
   for (unsigned i = 0; i < count; ++i)
   {
@@ -258,13 +374,21 @@ void PollHookModules(bool logAttempts)
     base = base ? base + 1 : path;
     if (_wcsnicmp(base, L"graphics-hook", 13) == 0)
     {
-      present = true;
-      if (logAttempts && !s_seen)
-        Log("block: observed hook module loaded: %s", Narrow(base).c_str());
+      st.present = true;
+      st.baseName = Narrow(base);
       break;
     }
   }
-  if (logAttempts && s_seen && !present)
+  return st;
+}
+
+void PollHookModules(bool logAttempts)
+{
+  static bool s_seen = false;
+  const HookModuleState st = QueryHookModule();
+  if (logAttempts && st.present && !s_seen)
+    Log("block: observed hook module loaded: %s", st.baseName.c_str());
+  if (logAttempts && s_seen && !st.present)
     Log("block: hook module no longer present");
-  s_seen = present;
+  s_seen = st.present;
 }

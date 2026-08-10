@@ -413,3 +413,136 @@ way `signature-policy` needs the `SetErrorMode` fix, since it is selectable dire
 24. `--show-block-errors` (if implemented) restores the dialog, confirming the suppression is
     deliberate and not an accident of timing.
 25. `squat-ipc` and `unload-hook` produce no dialogs either, before or after an `F7` toggle.
+
+---
+
+# Addendum — round 4
+
+The tool is now driving real e2e tests in the Streamlabs Desktop repo
+(`test/helpers/game-capture-target.ts` + `test/regular/game-capture.ts`), which fetch the pinned
+`v0.1.0` release. That surfaced one bug and a set of things that would make it much easier to
+consume from a test harness.
+
+## Bug: `cs2-blocked`'s default `squat-ipc` does not actually block capture
+
+Measured 2026-08-10 against release v0.1.0.
+
+```
+.\tools\launch.ps1 -Profile cs2-blocked -Json
+{"profile":"cs2-blocked", ..., "blockCapture":"squat-ipc", "captureExpected":false}
+```
+
+Point a Streamlabs Game Capture source at it and **capture succeeds** — the source reports the
+target's own client area, i.e. real frames. The profile claims `captureExpected: false`, so a test
+that trusts that field fails.
+
+The same profile with `-BlockCapture signature-policy` **does** block: the source never matches the
+client area and stays on Game Capture's placeholder. So the target and the harness are fine; only
+`squat-ipc` is ineffective.
+
+Regression window: round 3 switched `cs2-blocked`'s default from `signature-policy` to `squat-ipc`
+to avoid the Bad Image dialog. The dialog problem was solved, but the block silently stopped
+working.
+
+Things worth checking, roughly in order of likelihood:
+
+- **DACL polarity.** A *NULL* DACL grants everyone; an *empty* DACL denies everyone. These are easy
+  to invert, and `SECURITY_DESCRIPTOR` initialised but never given a DACL is NULL, not empty.
+- **Timing.** The objects must exist and be locked down *before* the hook initialises. If OBS
+  creates them first, squatting afterwards does nothing.
+- **Names.** They are per-target-pid; confirm the exact construction against `init_event` /
+  `init_mutex` in `obs-studio/plugins/win-capture/graphics-hook/graphics-hook.c` and
+  `open_event_gc` in `game-capture.c`. A near-miss name silently no-ops.
+- **Self-denial.** If the DACL denies everyone, it also denies the injected hook running *as the
+  target's own token* — which is the intent — but verify the target itself still works.
+- **Fallback.** Check whether the hook recreates or works around missing/denied objects.
+
+Until it is fixed, please either make `signature-policy` the default for `cs2-blocked` again (now
+that dialogs are suppressed) or mark `squat-ipc` as unverified in `--list-profiles` output.
+
+## Improvements for test consumption
+
+Ordered by how much they would help. (1) and (2) are the big ones.
+
+### 1. Structured events on stdout — `--events json`
+
+Tests currently scrape two human-readable lines: `mode -> windowed client=1280x720` and
+`app: hwnd=...`. Any wording change breaks them silently. Emit NDJSON instead, one object per line:
+
+```json
+{"event":"ready","pid":41756,"hwnd":"0x0023158C","exe":"cs2.exe",
+ "windowClass":"FakeGameWindowClass","windowTitle":"Counter-Strike 2",
+ "clientWidth":1280,"clientHeight":720,"api":"d3d11","blockCapture":"signature-policy",
+ "obsWindowSetting":"Counter-Strike 2:FakeGameWindowClass:cs2.exe"}
+```
+
+Have the **app** compute `obsWindowSetting` (`title:class:exe`, `#`→`#22` then `:`→`#3A`) so the
+encoding has one owner instead of being reimplemented in every consumer.
+
+### 2. Hook-state events — the highest-value addition
+
+From the Desktop side there is **no reliable way to tell "capturing" from "showing the
+placeholder"**: Streamlabs' Game Capture renders a placeholder at its own size when it is not
+capturing, so `source.width/height` is non-zero either way. Our test currently has to compare the
+source's dimensions against the target's exact client area to infer capture — indirect, and it
+silently passed for the wrong reason until we noticed.
+
+The target can answer this directly, from inside the process:
+
+- `graphics-hook64.dll` (or 32) appearing in its own module list
+- the `CaptureHook_*` objects being created/signalled
+
+```json
+{"event":"hook_attempt","ts":"..."}
+{"event":"hooked","ts":"..."}
+{"event":"hook_blocked","reason":"signature-policy","ts":"..."}
+```
+
+That turns "did capture work?" into a direct assertion instead of an inference.
+
+### 3. Block self-verification
+
+Every block mode should verify itself and say so, rather than assuming the API call worked:
+
+- `signature-policy` → `GetProcessMitigationPolicy(ProcessSignaturePolicy)`, check
+  `MicrosoftSignedOnly == 1`
+- `squat-ipc` → reopen each squatted object and confirm access is denied
+- `unload-hook` → report each unload
+
+```json
+{"event":"block_active","mode":"squat-ipc","verified":false}
+```
+
+Exit non-zero (or at minimum log loudly) when a requested block cannot be verified. **This check
+alone would have caught the bug above at the moment it was introduced.**
+
+### 4. `--instance <id>` for disambiguation
+
+`cs2` and `cs2-blocked` are identical to OBS — same title, class and executable — so two running
+at once cannot be told apart and a test can hook the wrong one. Ours has to stop all targets
+before launching each one.
+
+Allow a suffix that does not break the profile's own match mode: append to the **window class**
+for exe-matched profiles, to the **title** for class-matched ones, and warn if the requested
+suffix would break matching. Include the resolved values in the `ready` event.
+
+### 5. Smaller things
+
+- `--ready-file <path>` writing the same `ready` JSON, for harnesses that cannot read stdout.
+- Distinct exit codes: window never created / block requested but unverified / renderer init
+  failed. Right now any failure is just a non-zero exit with text.
+- Keep `--list-profiles --json` as the single source of truth for profile metadata, and add
+  `clientWidth`/`clientHeight` to it so a harness knows the expected size before launching.
+
+## Acceptance criteria (round 4)
+
+26. `-Profile cs2-blocked` (default block mode) genuinely prevents capture: a Streamlabs Game
+    Capture source pointed at it never reports the target's client area.
+27. `--events json` emits a parseable `ready` line containing `obsWindowSetting` and client size,
+    and the Desktop helper can drop its regex scraping of human-readable log lines.
+28. `hooked` / `hook_blocked` events fire correctly for `--block-capture none` and for each block
+    mode.
+29. `block_active` reports `verified: true` for every mode that claims to block, and the process
+    exits non-zero when it cannot verify.
+30. Two profiles launched with different `--instance` values are independently selectable in the
+    OBS window list.
