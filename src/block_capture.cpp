@@ -69,6 +69,85 @@ void NameWithPid(wchar_t* out, size_t cch, const wchar_t* base)
   swprintf_s(out, cch, L"%s%lu", base, GetCurrentProcessId());
 }
 
+unsigned ModuleCountClamped(DWORD neededBytes, unsigned capacity)
+{
+  const unsigned n = neededBytes / sizeof(HMODULE);
+  return n > capacity ? capacity : n;
+}
+
+// Open by name must fail with ACCESS_DENIED for empty-DACL squat objects.
+bool ExpectOpenDenied(const wchar_t* name, HANDLE (*opener)(const wchar_t*), const char* kind,
+                      std::wstring* detail)
+{
+  SetLastError(0);
+  HANDLE h = opener(name);
+  if (h)
+  {
+    CloseHandle(h);
+    if (detail)
+      *detail = std::wstring(L"Open allowed on ") + name;
+    Log("block: squat-ipc verify FAIL %s Open allowed on %s", kind, Narrow(name).c_str());
+    return false;
+  }
+  const DWORD err = GetLastError();
+  // ACCESS_DENIED (5) is ideal; FILE_NOT_FOUND means object missing (also bad for squat).
+  if (err != ERROR_ACCESS_DENIED)
+  {
+    if (detail)
+      *detail = std::wstring(L"Open ") + name + L" err=" + std::to_wstring(err) +
+                L" (want ACCESS_DENIED)";
+    Log("block: squat-ipc verify FAIL %s Open err=%lu on %s", kind, err, Narrow(name).c_str());
+    return false;
+  }
+  return true;
+}
+
+HANDLE OpenEventSync(const wchar_t* name)
+{
+  return OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name);
+}
+
+HANDLE OpenMutexSync(const wchar_t* name)
+{
+  return OpenMutexW(SYNCHRONIZE, FALSE, name);
+}
+
+HANDLE OpenMapRw(const wchar_t* name)
+{
+  return OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, name);
+}
+
+bool ExpectCreateEventDenied(const wchar_t* name, std::wstring* detail)
+{
+  SetLastError(0);
+  HANDLE h = CreateEventW(nullptr, FALSE, FALSE, name);
+  const DWORD err = GetLastError();
+  if (h)
+  {
+    CloseHandle(h);
+    if (err == ERROR_ALREADY_EXISTS)
+    {
+      if (detail)
+        *detail = std::wstring(L"CreateEvent allowed on ") + name;
+      Log("block: squat-ipc verify FAIL CreateEvent allowed on %s", Narrow(name).c_str());
+      return false;
+    }
+    // Created a new object - squat handle lost.
+    if (detail)
+      *detail = std::wstring(L"CreateEvent created new object for ") + name;
+    Log("block: squat-ipc verify FAIL CreateEvent created new %s", Narrow(name).c_str());
+    return false;
+  }
+  if (err != ERROR_ACCESS_DENIED)
+  {
+    if (detail)
+      *detail = L"CreateEvent failed with unexpected error " + std::to_wstring(err);
+    Log("block: squat-ipc verify FAIL CreateEvent err=%lu on %s", err, Narrow(name).c_str());
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 const wchar_t* BlockCaptureModeName(BlockCaptureMode m)
@@ -124,7 +203,7 @@ bool ApplySignaturePolicy(std::wstring* error)
     Log("block: signature-policy FAILED err=%lu", err);
     return false;
   }
-  Log("block: signature-policy APPLIED (MicrosoftSignedOnly=1) — irreversible for this process");
+  Log("block: signature-policy APPLIED (MicrosoftSignedOnly=1) - irreversible for this process");
   return true;
 }
 
@@ -166,17 +245,15 @@ bool ApplySquatIpc(std::wstring* error)
 
   wchar_t name[128];
 
-  // (1) Duplicate-hook mutex — OBS graphics-hook DllMain:
-  //     open_mutex(graphics_hook_dup_mutex+pid) succeeds → refuse load as duplicate.
-  // Default DACL so OpenMutex from the injected DLL succeeds (empty DACL would make Open fail
-  // and the hook would try CreateMutex instead).
+  // (1) Duplicate-hook mutex - OBS graphics-hook DllMain:
+  //     open_mutex(graphics_hook_dup_mutex+pid) succeeds -> refuse load as duplicate.
   NameWithPid(name, _countof(name), kDupMutexBase);
   g_dupMutex = CreateMutexW(nullptr, FALSE, name);
   if (!g_dupMutex)
     return fail(name);
   Log("block: squat-ipc dup-mutex %s (hook DllMain early-out)", Narrow(name).c_str());
 
-  // (2) Empty-DACL CaptureHook_* objects — defense in depth for init_signals / create_hook_info.
+  // (2) Empty-DACL CaptureHook_* objects - defense in depth.
   SECURITY_DESCRIPTOR sd{};
   SECURITY_ATTRIBUTES sa{};
   PACL acl = nullptr;
@@ -283,44 +360,30 @@ bool VerifySquatIpc(std::wstring* detail)
   }
   CloseHandle(hOpen);
 
-  // CaptureHook events: subsequent CreateEvent (what the hook does) must be denied.
-  NameWithPid(name, _countof(name), kEventBases[0]);
-  SetLastError(0);
-  HANDLE hCreate = CreateEventW(nullptr, FALSE, FALSE, name);
-  const DWORD err = GetLastError();
-  if (hCreate)
+  // Every CaptureHook_* object: Open denied + CreateEvent denied for events.
+  for (const wchar_t* base : kEventBases)
   {
-    // Got a handle — either we received the existing object (bad: access allowed) or created new
-    // (bad: our squat handle was lost). Either way, hook init could proceed.
-    CloseHandle(hCreate);
-    if (err == ERROR_ALREADY_EXISTS)
-    {
-      if (detail)
-        *detail = L"CreateEvent on squatted name succeeded (DACL did not deny)";
-      Log("block: squat-ipc verify FAIL CreateEvent allowed on %s", Narrow(name).c_str());
+    NameWithPid(name, _countof(name), base);
+    if (!ExpectCreateEventDenied(name, detail))
       return false;
-    }
-  } else if (err != ERROR_ACCESS_DENIED)
-  {
-    if (detail)
-      *detail = L"CreateEvent failed with unexpected error " + std::to_wstring(err);
-    Log("block: squat-ipc verify FAIL CreateEvent err=%lu (want ACCESS_DENIED)", err);
-    return false;
+    if (!ExpectOpenDenied(name, OpenEventSync, "event", detail))
+      return false;
   }
-
-  // OpenEvent should also deny.
-  HANDLE hEv = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name);
-  if (hEv)
+  for (const wchar_t* base : kMutexBases)
   {
-    CloseHandle(hEv);
-    if (detail)
-      *detail = L"OpenEvent on squatted name succeeded";
-    Log("block: squat-ipc verify FAIL OpenEvent allowed on %s", Narrow(name).c_str());
-    return false;
+    NameWithPid(name, _countof(name), base);
+    if (!ExpectOpenDenied(name, OpenMutexSync, "mutex", detail))
+      return false;
+  }
+  for (const wchar_t* base : kMapBases)
+  {
+    NameWithPid(name, _countof(name), base);
+    if (!ExpectOpenDenied(name, OpenMapRw, "mapping", detail))
+      return false;
   }
 
   if (detail)
-    *detail = L"dup-mutex held; CaptureHook Create/Open denied";
+    *detail = L"dup-mutex held; all CaptureHook_* Open/Create denied";
   Log("block: squat-ipc verify OK (%s)", detail ? Narrow(*detail).c_str() : "ok");
   return true;
 }
@@ -332,7 +395,7 @@ bool TryUnloadGraphicsHook()
   if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed))
     return false;
 
-  const unsigned count = needed / sizeof(HMODULE);
+  const unsigned count = ModuleCountClamped(needed, _countof(mods));
   bool unloaded = false;
   for (unsigned i = 0; i < count; ++i)
   {
@@ -364,7 +427,7 @@ HookModuleState QueryHookModule()
   if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed))
     return st;
 
-  const unsigned count = needed / sizeof(HMODULE);
+  const unsigned count = ModuleCountClamped(needed, _countof(mods));
   for (unsigned i = 0; i < count; ++i)
   {
     wchar_t path[MAX_PATH]{};
@@ -380,6 +443,17 @@ HookModuleState QueryHookModule()
     }
   }
   return st;
+}
+
+bool IsHookIpcReadyPresent()
+{
+  wchar_t name[128];
+  NameWithPid(name, _countof(name), L"CaptureHook_HookReady");
+  HANDLE h = OpenEventW(SYNCHRONIZE, FALSE, name);
+  if (!h)
+    return false;
+  CloseHandle(h);
+  return true;
 }
 
 void PollHookModules(bool logAttempts)

@@ -45,5 +45,9 @@ struct HookModuleState
 // Snapshot whether a graphics-hook*.dll is mapped into this process.
 HookModuleState QueryHookModule();
 
+// True when CaptureHook_HookReady+pid is openable (hook init_signals completed).
+// Stronger than "DLL mapped" alone — DllMain can load then fail later init.
+bool IsHookIpcReadyPresent();
+
 // Poll module list; log transitions when logAttempts is true.
 void PollHookModules(bool logAttempts);

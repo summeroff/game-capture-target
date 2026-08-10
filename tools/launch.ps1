@@ -66,6 +66,23 @@ function Get-ObsWindowSetting([string]$title, [string]$cls, [string]$exeName) {
   return "$(Encode-ObsPart $title):$(Encode-ObsPart $cls):$(Encode-ObsPart $exeName)"
 }
 
+# PS 5.1 Start-Process flattens string[] ArgumentList without quoting.
+# Build one Windows command-line string with proper quotes.
+function Format-WinArgList([string[]]$Parts) {
+  ($Parts | ForEach-Object {
+    $s = [string]$_
+    if ($s -notmatch '[\s"]') { return $s }
+    '"' + ($s -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1') + '"'
+  }) -join ' '
+}
+
+# Write-Error is terminating under $ErrorActionPreference=Stop; use stderr + exit instead.
+function Fail-Launch {
+  param([string]$Message, [int]$Code = 1)
+  [Console]::Error.WriteLine("error: $Message")
+  exit $Code
+}
+
 function Stop-AllSpawned {
   if (-not (Test-Path -LiteralPath $spawnRoot)) {
     if ($Json) { @{ stopped = @(); spawnDirCleared = $true } | ConvertTo-Json -Compress; return }
@@ -263,9 +280,7 @@ if ($Title) { $argList += @('--title', $Title) }
 if ($Class) { $argList += @('--class', $Class) }
 if ($Instance) { $argList += @('--instance', $Instance) }
 
-$cmdDisplay = "`"$dest`" " + ($argList | ForEach-Object {
-  if ($_ -match '\s') { "'$_'" } else { $_ }
-}) -join ' '
+$cmdDisplay = "`"$dest`" " + (Format-WinArgList $argList)
 
 if (-not $Json) {
   Write-Host "launch: $cmdDisplay"
@@ -274,7 +289,8 @@ if (-not $Json) {
 # Redirect stdout (NDJSON) / stderr (human log) into spawn dir for debugging.
 $stdoutLog = Join-Path $outDir 'stdout.ndjson'
 $stderrLog = Join-Path $outDir 'stderr.log'
-$proc = Start-Process -FilePath $dest -ArgumentList $argList -WorkingDirectory $outDir -PassThru `
+$argString = Format-WinArgList $argList
+$proc = Start-Process -FilePath $dest -ArgumentList $argString -WorkingDirectory $outDir -PassThru `
   -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
 if (-not $proc) { throw "Start-Process failed" }
 
@@ -282,9 +298,8 @@ if (-not $proc) { throw "Start-Process failed" }
 Start-Sleep -Milliseconds 400
 $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
 if (-not $alive) {
-  Write-Error "process exited immediately (pid $($proc.Id)). This is the silent-death case the tool exists to catch."
   if (Test-Path $stderrLog) { Get-Content $stderrLog | Write-Host }
-  exit 3
+  Fail-Launch -Message "process exited immediately (pid $($proc.Id)). This is the silent-death case the tool exists to catch." -Code 3
 }
 
 # Prefer app-owned ready JSON (obsWindowSetting computed once in the exe).
@@ -309,13 +324,11 @@ if (-not $ready) {
   if (-not $win) {
     $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
     if (-not $alive) {
-      Write-Error "process exited before ready/window (pid $($proc.Id))"
       if (Test-Path $stderrLog) { Get-Content $stderrLog | Write-Host }
-      exit 4
+      Fail-Launch -Message "process exited before ready/window (pid $($proc.Id))" -Code 4
     }
-    Write-Error "timed out waiting for ready event/window (pid $($proc.Id), ${WaitSeconds}s)"
     if (Test-Path $stderrLog) { Get-Content $stderrLog | Select-Object -Last 40 | Write-Host }
-    exit 5
+    Fail-Launch -Message "timed out waiting for ready event/window (pid $($proc.Id), ${WaitSeconds}s)" -Code 5
   }
   $titleOut = if ($win.Title) { $win.Title } elseif ($Title) { $Title } else { $p.windowTitle }
   $classOut = if ($win.Class) { $win.Class } elseif ($Class) { $Class } else { $p.windowClass }
@@ -366,9 +379,8 @@ if (-not $ready) {
 # Still alive?
 $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
 if (-not $alive) {
-  Write-Error "process exited after ready (pid $($proc.Id)) - check block verify / stderr.log"
   if (Test-Path $stderrLog) { Get-Content $stderrLog | Select-Object -Last 40 | Write-Host }
-  exit 6
+  Fail-Launch -Message "process exited after ready (pid $($proc.Id)) - check block verify / stderr.log" -Code 6
 }
 
 if ($Json) {

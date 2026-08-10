@@ -52,6 +52,7 @@ private:
   bool ApplyBlockNow(std::wstring* error);
   void LiftReversibleBlock();
   void EmitBlockActive(const char* mode, bool verified, const char* detail);
+  void EmitHookBlocked(const char* reason);
   void EmitReady();
   void TickHookEvents();
   void Frame();
