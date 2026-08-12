@@ -548,7 +548,13 @@ void App::TickBlockCapture()
       // First successful unload promotes block_active to verified.
       EmitBlockActive("unload-hook", true, "unloaded");
       hookPresent_ = false;
-      hookedEmitted_ = false;
+      // Do not just clear hookedEmitted_ — a prior hooked (e.g. --block-capture-after)
+      // must emit unhooked when HookReady is torn down by FreeLibrary.
+      if (hookedEmitted_)
+      {
+        hookedEmitted_ = false;
+        EmitUnhooked("unload-hook");
+      }
       // keep armed - OBS will reinject
     }
   }
