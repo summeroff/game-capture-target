@@ -232,6 +232,15 @@ bool App::CreateRenderer(std::wstring* error)
 
 void App::InitScene()
 {
+  // Draw-list scenes are d3d11 / d3d12 / GDI. Vulkan has its own default visual
+  // (cycling clear + title frame). --scene is accepted but not rendered there.
+  if (cfg_.api == GraphicsApi::Vulkan)
+  {
+    Log("scene: vulkan native visual (cycling clear + title frame); --scene %s ignored",
+        Narrow(scene::SceneIdName(cfg_.scene)).c_str());
+    return;
+  }
+
   scene_ = scene::CreateScene(cfg_.scene);
   scene::SceneConfig sc;
   sc.id = cfg_.scene;
@@ -241,7 +250,8 @@ void App::InitScene()
   if (hwnd_)
     ClientSize(&cw, &ch);
   scene_->Reset(sc, cw, ch);
-  Log("scene: %s seed=0x%08X", Narrow(scene_->Name()).c_str(), cfg_.sceneSeed);
+  Log("scene: %s seed=0x%08X (draw-list; d3d11 reference, d3d12/GDI approximate)",
+      Narrow(scene_->Name()).c_str(), cfg_.sceneSeed);
 }
 
 bool App::ApplyBlockNow(std::wstring* error)
@@ -452,6 +462,15 @@ void App::EmitHookBlocked(const char* reason)
   Log("hook_blocked: reason=%s", reason ? reason : "?");
 }
 
+void App::EmitUnhooked(const char* reason)
+{
+  std::ostringstream o;
+  o << "{\"event\":\"unhooked\",\"reason\":\"" << JsonEscapeUtf8(reason ? reason : "")
+    << "\",\"ts\":\"" << EventsTimestamp() << "\"}";
+  EmitEventJson(o.str());
+  Log("unhooked: reason=%s", reason ? reason : "?");
+}
+
 void App::TickHookEvents()
 {
   const HookModuleState st = QueryHookModule();
@@ -466,12 +485,13 @@ void App::TickHookEvents()
   } else if (!st.present && hookPresent_)
   {
     hookPresent_ = false;
-    hookedEmitted_ = false;
   }
+
+  const bool hookReady = IsHookIpcReadyPresent();
 
   // Capture-complete signal: module present + HookReady IPC object exists.
   // (Stronger than DLL-mapped alone; DllMain can load then fail init_signals.)
-  if (st.present && !blockActive_ && !hookedEmitted_ && IsHookIpcReadyPresent())
+  if (st.present && !blockActive_ && !hookedEmitted_ && hookReady)
   {
     hookedEmitted_ = true;
     std::ostringstream h;
@@ -479,6 +499,13 @@ void App::TickHookEvents()
       << EventsTimestamp() << "\"}";
     EmitEventJson(h.str());
     Log("hooked: %s (HookReady present)", st.baseName.c_str());
+  }
+
+  // After a successful hooked, HookReady going away is the recovery/churn signal.
+  if (hookedEmitted_ && !hookReady)
+  {
+    hookedEmitted_ = false;
+    EmitUnhooked(st.present ? "hook_ready_gone" : "module_gone");
   }
 
   // Observed inject while a block is armed => hook_blocked (real attempt, not arm-time).
@@ -521,7 +548,13 @@ void App::TickBlockCapture()
       // First successful unload promotes block_active to verified.
       EmitBlockActive("unload-hook", true, "unloaded");
       hookPresent_ = false;
-      hookedEmitted_ = false;
+      // Do not just clear hookedEmitted_ — a prior hooked (e.g. --block-capture-after)
+      // must emit unhooked when HookReady is torn down by FreeLibrary.
+      if (hookedEmitted_)
+      {
+        hookedEmitted_ = false;
+        EmitUnhooked("unload-hook");
+      }
       // keep armed - OBS will reinject
     }
   }
@@ -884,9 +917,11 @@ void App::OnHotkeyRecreateDevice()
 void App::OnHotkeyTitle()
 {
   ++titleCounter_;
-  cfg_.title = L"Fake Game #" + std::to_wstring(titleCounter_);
+  cfg_.title += L" #";
+  cfg_.title += std::to_wstring(titleCounter_);
   SetWindowTextW(hwnd_, cfg_.title.c_str());
   Log("hotkey F5: title -> %s", Narrow(cfg_.title).c_str());
+  EmitProfileMatchWarnings();
 }
 
 void App::OnHotkeyChurn()

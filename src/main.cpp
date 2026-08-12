@@ -90,20 +90,19 @@ int wmain(int argc, wchar_t** argv)
     }
   }
 
-  // Suppress Windows hard-error boxes for failed DLL loads (e.g. signature-policy
-  // rejecting graphics-hook*.dll with STATUS_INVALID_IMAGE_HASH / 0xc0000428).
-  // Must be process-wide SetErrorMode — the failing load runs on OBS's inject thread.
-  // Harmless when no blocking is configured; set at startup so --block-capture-after
-  // still covers early inject attempts.
-  if (!cfg.showBlockErrors)
+  // signature-policy rejects unsigned graphics-hook*.dll (0xc0000428). The failing
+  // load runs on OBS's inject thread, so suppression must be process-wide SetErrorMode
+  // at startup (covers --block-capture-after). Do not apply for other modes — it also
+  // hides crash dialogs (SEM_NOGPFAULTERRORBOX).
+  if (cfg.blockCapture == BlockCaptureMode::SignaturePolicy && !cfg.showBlockErrors)
   {
     const UINT prev =
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX | SEM_NOGPFAULTERRORBOX);
     (void)prev;
-    Log("error-mode: hard-error dialogs suppressed "
+    Log("error-mode: hard-error dialogs suppressed for signature-policy "
         "(SEM_FAILCRITICALERRORS|SEM_NOOPENFILEERRORBOX|SEM_NOGPFAULTERRORBOX); "
         "use --show-block-errors to restore");
-  } else
+  } else if (cfg.showBlockErrors)
   {
     Log("error-mode: --show-block-errors set — Windows loader dialogs may appear");
   }
