@@ -1,6 +1,8 @@
 #include "renderer.hpp"
 
+#include "bmp_write.hpp"
 #include "font8x8.hpp"
+#include "gfx_math.hpp"
 #include "log.hpp"
 
 #include <cmath>
@@ -17,6 +19,14 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 
+using gfx::CBData;
+using gfx::HrMsg;
+using gfx::MatMul;
+using gfx::MatOrthoPixels;
+using gfx::MatRotateZ;
+using gfx::MatScale;
+using gfx::MatTranslate;
+using gfx::Vertex;
 using Microsoft::WRL::ComPtr;
 
 namespace
@@ -69,70 +79,8 @@ float4 PSText(VSOut i) : SV_Target {
 }
 )";
 
-struct Vertex
-{
-  float x, y, u, v;
-};
+// math lives in gfx_math.hpp (shared with d3d11).
 
-struct CBData
-{
-  float transform[16];
-  float color[4];
-  float timeRes[4];
-};
-
-void MatIdentity(float* m)
-{
-  std::memset(m, 0, 16 * sizeof(float));
-  m[0] = m[5] = m[10] = m[15] = 1.f;
-}
-void MatOrthoPixels(float* m, float w, float h)
-{
-  std::memset(m, 0, 16 * sizeof(float));
-  m[0] = 2.f / w;
-  m[5] = -2.f / h;
-  m[10] = 1.f;
-  m[12] = -1.f;
-  m[13] = 1.f;
-  m[15] = 1.f;
-}
-void MatMul(float* out, const float* a, const float* b)
-{
-  float t[16];
-  for (int c = 0; c < 4; ++c)
-    for (int r = 0; r < 4; ++r)
-      t[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0] + a[1 * 4 + r] * b[c * 4 + 1] +
-                     a[2 * 4 + r] * b[c * 4 + 2] + a[3 * 4 + r] * b[c * 4 + 3];
-  std::memcpy(out, t, sizeof(t));
-}
-void MatTranslate(float* m, float x, float y)
-{
-  MatIdentity(m);
-  m[12] = x;
-  m[13] = y;
-}
-void MatRotateZ(float* m, float rad)
-{
-  MatIdentity(m);
-  const float c = std::cos(rad), s = std::sin(rad);
-  m[0] = c;
-  m[1] = s;
-  m[4] = -s;
-  m[5] = c;
-}
-void MatScale(float* m, float sx, float sy)
-{
-  MatIdentity(m);
-  m[0] = sx;
-  m[5] = sy;
-}
-
-std::wstring HrMsg(HRESULT hr)
-{
-  wchar_t buf[64];
-  swprintf_s(buf, L"HRESULT 0x%08X", static_cast<unsigned>(hr));
-  return buf;
-}
 
 class D3D12Renderer final : public IRenderer
 {
@@ -199,6 +147,8 @@ public:
       fenceEvent_ = nullptr;
     }
     fence_.Reset();
+    dumpReadback_.Reset();
+    dumpReadbackBytes_ = 0;
     device_.Reset();
     factory_.Reset();
     frameIndex_ = 0;
@@ -219,6 +169,13 @@ public:
   bool RecreateSwapchain(std::wstring* error) override
   {
     WaitGpu();
+    // Leave exclusive fullscreen before resize (same as d3d11).
+    if (swapchain_)
+    {
+      BOOL fs = FALSE;
+      if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, nullptr)) && fs)
+        swapchain_->SetFullscreenState(FALSE, nullptr);
+    }
     for (UINT i = 0; i < kFrameCount; ++i)
     {
       renderTargets_[i].Reset();
@@ -229,14 +186,19 @@ public:
           swapchain_->ResizeBuffers(kFrameCount, width_, height_, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
       if (FAILED(hr))
       {
-        *error = L"ResizeBuffers failed: " + HrMsg(hr);
+        swapchain_.Reset();
+        if (!CreateSwapchain(error))
+          return false;
+      } else if (!CreateRtv(error))
+      {
         return false;
       }
-    } else
+    } else if (!CreateSwapchain(error))
     {
-      return CreateSwapchain(error);
+      return false;
     }
-    return CreateRtv(error);
+    ApplyFullscreenState();
+    return true;
   }
 
   bool RecreateDevice(std::wstring* error) override
@@ -256,19 +218,7 @@ public:
   bool SetMode(WindowMode mode, std::wstring* error) override
   {
     mode_ = mode;
-    if (!swapchain_)
-      return true;
-    if (mode == WindowMode::FullscreenExclusive)
-    {
-      HRESULT hr = swapchain_->SetFullscreenState(TRUE, nullptr);
-      if (FAILED(hr))
-        Log("d3d12: SetFullscreenState TRUE failed %s", Narrow(HrMsg(hr)).c_str());
-    } else
-    {
-      BOOL fs = FALSE;
-      if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, nullptr)) && fs)
-        swapchain_->SetFullscreenState(FALSE, nullptr);
-    }
+    ApplyFullscreenState();
     (void)error;
     return true;
   }
@@ -319,11 +269,15 @@ public:
     cbSlot_ = 0;
     EnsureUnitQuad();
 
-    // Draw-list (solid approx for orb/ring/tri — motion-correct parity).
+    // Draw-list (solid approx for orb/ring/tri — motion-correct, not visual parity).
+    int drew = 0;
     if (sd)
     {
       for (const auto& p : sd->prims)
+      {
         DrawPrimSolid(fi, ortho, p);
+        ++drew;
+      }
 
       if (sd->flashA > 0.001f)
       {
@@ -339,49 +293,73 @@ public:
       DrawSolidXform(fi, ortho, cx, cy, t * 2.2f, 90.f, 90.f, 0.8f, 0.5f, 0.9f, 1.f, true);
     }
 
+    const scene::BackdropId bd = sd ? sd->backdrop : scene::BackdropId::Solid;
+    if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
+    {
+      scene::PrimCounts pc{};
+      if (sd)
+        pc = scene::CountPrims(sd->prims);
+      Log("d3d12-draw: scene=%s backdrop=%s auroraPS=0 fxPS=0 clear=%.3f,%.3f,%.3f "
+          "submitted_prims=%d/%d [solid=%d orb=%d ring=%d line=%d tri=%d circle=%d] flashA=%.2f "
+          "(approx solids; no nebula/fractal PS)",
+          Narrow(info.sceneName ? info.sceneName : L"?").c_str(),
+          Narrow(scene::BackdropIdName(bd)).c_str(), sd ? sd->clearR : clear[0],
+          sd ? sd->clearG : clear[1], sd ? sd->clearB : clear[2], drew, pc.total, pc.solid, pc.orb,
+          pc.ring, pc.line, pc.tri, pc.circle, sd ? sd->flashA : 0.f);
+    }
+
     if (!info.noHud)
     {
       char big[32];
       sprintf_s(big, "%llu", (unsigned long long)info.frameIndex);
-      DrawTextLine(fi, big, (width_ - int(strlen(big)) * 8 * 6) * 0.5f, height_ * 0.18f, 6.f, 1.f,
-                   1.f, 0.2f, 1.f);
+      const float scale = 6.f;
+      const float tw = float(std::strlen(big)) * 8.f * scale;
+      DrawTextLine(fi, big, (width_ - tw) * 0.5f, height_ * 0.06f, scale, 1.f, 0.95f, 0.35f, 1.f);
 
       char line[256];
-      float y = 8.f;
-      auto hud = [&](const char* s) {
-        DrawTextLine(fi, s, 8.f, y, 2.f, 0.95f, 0.95f, 0.95f, 1.f);
-        y += 20.f;
-      };
-      sprintf_s(line, "frame  %llu", (unsigned long long)info.frameIndex);
-      hud(line);
-      sprintf_s(line, "size   %dx%d", info.clientW, info.clientH);
-      hud(line);
-      hud("api    d3d12");
-      sprintf_s(line, "swap   %s", Narrow(SwapEffectName()).c_str());
-      hud(line);
-      sprintf_s(line, "present %s", Narrow(PresentModeName()).c_str());
-      hud(line);
-      sprintf_s(line, "mode   %s", Narrow(WindowModeName(info.mode)).c_str());
-      hud(line);
-      sprintf_s(line, "scene  %s", Narrow(info.sceneName ? info.sceneName : L"?").c_str());
-      hud(line);
-      sprintf_s(line, "seed   0x%08X", info.sceneSeed);
-      hud(line);
-      sprintf_s(line, "class  %s", Narrow(info.windowClass).c_str());
-      hud(line);
-      sprintf_s(line, "title  %s", Narrow(info.windowTitle).c_str());
-      hud(line);
-      sprintf_s(line, "pid    %lu", (unsigned long)info.pid);
-      hud(line);
-      sprintf_s(line, "time   %.2fs", info.elapsedSec);
-      hud(line);
+      std::vector<std::string> lines;
+      sprintf_s(line, "frame %llu  %dx%d  d3d12", (unsigned long long)info.frameIndex, info.clientW,
+                info.clientH);
+      lines.emplace_back(line);
+      sprintf_s(line, "scene %s  seed 0x%08X",
+                Narrow(info.sceneName ? info.sceneName : L"?").c_str(), info.sceneSeed);
+      lines.emplace_back(line);
+      sprintf_s(line, "draw bg=%s auroraPS=0 fxPS=0 n=%d",
+                Narrow(scene::BackdropIdName(bd)).c_str(), drew);
+      lines.emplace_back(line);
+      {
+        scene::PrimCounts pc{};
+        if (sd)
+          pc = scene::CountPrims(sd->prims);
+        sprintf_s(line, "prims s%d o%d r%d l%d t%d  (approx)", pc.solid, pc.orb, pc.ring, pc.line,
+                  pc.tri);
+        lines.emplace_back(line);
+      }
       if (sd && !sd->hud.line1.empty())
-        hud(Narrow(sd->hud.line1).c_str());
-      if (sd && !sd->hud.line2.empty())
-        hud(Narrow(sd->hud.line2).c_str());
+        lines.emplace_back(Narrow(sd->hud.line1));
+      sprintf_s(line, "F1-F7 Esc  t=%.1fs", info.elapsedSec);
+      lines.emplace_back(line);
+
+      const float textScale = 2.f;
+      const float lineH = 8.f * textScale + 3.f;
+      const float plateH = 10.f + lineH * float(lines.size()) + 6.f;
+      const float plateW = 380.f;
+      DrawSolidXform(fi, ortho, 4.f + plateW * 0.5f, 4.f + plateH * 0.5f, 0.f, plateW, plateH, 0.f,
+                     0.f, 0.f, 0.62f, false);
+      float y = 10.f;
+      for (const auto& s : lines)
+      {
+        DrawTextLine(fi, s.c_str(), 12.f, y, textScale, 0.95f, 0.98f, 1.f, 1.f);
+        y += lineH;
+      }
     }
 
-    bar.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    const bool wantDump = info.dumpFramePath && !dumpedFrame_ && info.frameIndex >= 3;
+    if (wantDump)
+      RecordDumpCopy(fi);
+
+    bar.Transition.StateBefore =
+        wantDump ? D3D12_RESOURCE_STATE_COPY_SOURCE : D3D12_RESOURCE_STATE_RENDER_TARGET;
     bar.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     cmdList_->ResourceBarrier(1, &bar);
     cmdList_->Close();
@@ -391,6 +369,20 @@ public:
     swapchain_->Present(cfg_.vsync ? 1 : 0, 0);
     fenceValues_[fi] = ++fenceValue_;
     queue_->Signal(fence_.Get(), fenceValues_[fi]);
+
+    if (wantDump)
+    {
+      WaitGpu();
+      if (FinishDumpBmp(info.dumpFramePath))
+      {
+        dumpedFrame_ = true;
+        Log("d3d12: dumped framebuffer to %s (%dx%d)", Narrow(info.dumpFramePath).c_str(), width_,
+            height_);
+      } else
+      {
+        Log("d3d12: dump-frame FAILED path=%s", Narrow(info.dumpFramePath).c_str());
+      }
+    }
     frameIndex_++;
   }
 
@@ -402,6 +394,95 @@ public:
   const wchar_t* PresentModeName() const override { return cfg_.vsync ? L"vsync" : L"immediate"; }
 
 private:
+  void ApplyFullscreenState()
+  {
+    if (!swapchain_)
+      return;
+    if (mode_ == WindowMode::FullscreenExclusive)
+    {
+      HRESULT hr = swapchain_->SetFullscreenState(TRUE, nullptr);
+      if (FAILED(hr))
+        Log("d3d12: SetFullscreenState TRUE failed %s", Narrow(HrMsg(hr)).c_str());
+    } else
+    {
+      BOOL fs = FALSE;
+      if (SUCCEEDED(swapchain_->GetFullscreenState(&fs, nullptr)) && fs)
+      {
+        HRESULT hr = swapchain_->SetFullscreenState(FALSE, nullptr);
+        if (FAILED(hr))
+          Log("d3d12: SetFullscreenState FALSE failed %s", Narrow(HrMsg(hr)).c_str());
+      }
+    }
+  }
+
+  void RecordDumpCopy(UINT fi)
+  {
+    if (!device_ || !cmdList_ || !renderTargets_[fi])
+      return;
+
+    D3D12_RESOURCE_DESC srcDesc = renderTargets_[fi]->GetDesc();
+    UINT64 total = 0;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};
+    device_->GetCopyableFootprints(&srcDesc, 0, 1, 0, &layout, nullptr, nullptr, &total);
+    dumpPitch_ = static_cast<int>(layout.Footprint.RowPitch);
+    dumpW_ = static_cast<int>(srcDesc.Width);
+    dumpH_ = static_cast<int>(srcDesc.Height);
+
+    if (!dumpReadback_ || dumpReadbackBytes_ < total)
+    {
+      dumpReadback_.Reset();
+      D3D12_HEAP_PROPERTIES hp{};
+      hp.Type = D3D12_HEAP_TYPE_READBACK;
+      D3D12_RESOURCE_DESC rd{};
+      rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+      rd.Width = total;
+      rd.Height = 1;
+      rd.DepthOrArraySize = 1;
+      rd.MipLevels = 1;
+      rd.SampleDesc.Count = 1;
+      rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+      if (FAILED(device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                  IID_PPV_ARGS(&dumpReadback_))))
+      {
+        dumpReadbackBytes_ = 0;
+        return;
+      }
+      dumpReadbackBytes_ = total;
+    }
+
+    D3D12_RESOURCE_BARRIER toCopy{};
+    toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toCopy.Transition.pResource = renderTargets_[fi].Get();
+    toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    cmdList_->ResourceBarrier(1, &toCopy);
+
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = dumpReadback_.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = layout;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = renderTargets_[fi].Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src.SubresourceIndex = 0;
+    cmdList_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+  }
+
+  bool FinishDumpBmp(const wchar_t* path)
+  {
+    if (!dumpReadback_ || !path || dumpW_ < 1 || dumpH_ < 1)
+      return false;
+    void* mapped = nullptr;
+    if (FAILED(dumpReadback_->Map(0, nullptr, &mapped)) || !mapped)
+      return false;
+    const bool ok =
+        WriteBgra32ToBmp(path, dumpW_, dumpH_, static_cast<const uint8_t*>(mapped), dumpPitch_);
+    dumpReadback_->Unmap(0, nullptr);
+    return ok;
+  }
+
   bool CreateDevice(std::wstring* error)
   {
 #if defined(_DEBUG)
@@ -1009,6 +1090,11 @@ private:
   D3D12_GPU_VIRTUAL_ADDRESS cbGpu_[kFrameCount]{};
   uint8_t* cbMapped_[kFrameCount]{};
   float timeSec_ = 0.f;
+  bool dumpedFrame_ = false;
+  int dumpW_ = 0;
+  int dumpH_ = 0;
+  int dumpPitch_ = 0;
+  UINT64 dumpReadbackBytes_ = 0;
 
   ComPtr<IDXGIFactory4> factory_;
   ComPtr<ID3D12Device> device_;
@@ -1028,6 +1114,7 @@ private:
   ComPtr<ID3D12Resource> cb_[kFrameCount];
   ComPtr<ID3D12Resource> fontTex_;
   ComPtr<ID3D12Resource> fontUpload_;
+  ComPtr<ID3D12Resource> dumpReadback_;
   std::vector<ComPtr<ID3D12Resource>> gpuMem_;
 
   bool AllocateGpuMem(std::wstring* error)
