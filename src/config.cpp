@@ -491,9 +491,9 @@ Options:
   --exit-after <seconds>    Auto-quit (default: 0 = never)
   --topmost                 WS_EX_TOPMOST
   --no-hud                  Hide on-screen HUD
-  --scene <name>            Visual stress scene (default: aurora)
+  --scene <name>            Draw-list scene for d3d11/d3d12/none (default: aurora)
   --scene-seed <u32>        Deterministic scene RNG seed (default: 0xC5A2EE)
-  --list-scenes             Print scene table
+  --list-scenes             Scene table + which APIs implement them
   --dump-frame <path.bmp>   d3d11: write one framebuffer BMP after a few frames
   --gpu-mem <size>          Hold GPU RAM: 100|500|1024|2048 or 100mb|500mb|1gb|2gb
   --config <path>           INI file; flags override file values
@@ -503,24 +503,26 @@ Options:
   --block-capture <mode>    none | signature-policy | squat-ipc | unload-hook
   --block-capture-after <s> Delay before applying block (0 = immediate)
   --show-block-errors       Do not suppress Windows loader hard-error dialogs
-  --events json             NDJSON events on stdout (ready/hook/block); Log→stderr
+  --events json             NDJSON events on stdout (ready/hook/unhooked/block); Log→stderr
   --ready-file <path>       Write ready event JSON to file (harnesses without stdout)
   --instance <id>           Disambiguate concurrent runs (class or title suffix)
   --version / -V            Print version string and exit
   --help                    This help
 
-Scenes:
-  aurora   Nebula, orb rings, comet, EQ bars (default freeze-tell)
-  orbital  Drones vs asteroids, particles, explosions, screen flash
-  highway  Night neon highway: perspective road, traffic, speedo
-  fractal  Fullscreen twigl-style raymarch (seed picks variant A/B)
+Scenes (per-API; no visual parity across backends):
+  aurora   d3d11/d3d12/none default draw-list (nebula, orbs, comet, bars)
+  orbital  d3d11/d3d12/none (drones, asteroids, flash)
+  highway  d3d11/d3d12/none (night neon road)
+  fractal  d3d11 reference raymarch; d3d12/none approximate
+  vulkan   always uses its own default (cycling clear + title frame);
+           --scene is accepted and ignored
 
 Capture blocking:
   signature-policy  SetProcessMitigationPolicy(MicrosoftSignedOnly) AFTER the
                     renderer is fully up. Blocks unsigned graphics-hook*.dll.
                     IRREVERSIBLE for the process — cannot be toggled off.
-                    By default loader "Bad Image" dialogs are suppressed
-                    (SetErrorMode); use --show-block-errors to see them.
+                    Loader "Bad Image" dialogs are suppressed (SetErrorMode)
+                    only for this mode; use --show-block-errors to see them.
                     Default mechanism for profile cs2-blocked (verified).
   squat-ipc         Hold graphics_hook_dup_mutex+pid (hook DllMain duplicate
                     early-out) + empty-DACL CaptureHook_* objects. Reversible (F7).
@@ -534,7 +536,7 @@ Hotkeys:
   F2  Resize swapchain through preset resolutions
   F3  Destroy + recreate swapchain
   F4  Destroy + recreate device
-  F5  Change window title (append counter)
+  F5  Append #N to the current title (then re-check profile match)
   F6  Toggle churn mode (~2 Hz resize/recreate)
   F7  Toggle reversible capture block (squat-ipc / unload-hook)
   Esc Quit

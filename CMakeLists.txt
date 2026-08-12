@@ -166,7 +166,9 @@ target_link_libraries(fakegame PRIVATE
   psapi
 )
 
-# Vulkan headers: VULKAN_SDK, else vendored Khronos headers (no SDK required to build).
+# Vulkan is LoadLibrary'd at runtime. Compile against the trimmed C headers
+# (vulkan.h / vulkan_core.h / vulkan_win32.h / vk_platform.h + vk_video).
+# C++ wrappers and unused platform headers are not vendored.
 if(DEFINED ENV{VULKAN_SDK} AND EXISTS "$ENV{VULKAN_SDK}/Include/vulkan/vulkan.h")
   target_include_directories(fakegame PRIVATE "$ENV{VULKAN_SDK}/Include")
 elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include/vulkan/vulkan.h")

@@ -64,7 +64,7 @@ empty DACL + self-verify), and adds harness NDJSON events.
 | Mode | Flag | Reversible | What it does |
 |------|------|------------|--------------|
 | none | `--block-capture none` | — | Normal capture |
-| signature-policy | `--block-capture signature-policy` | **No** | `SetProcessMitigationPolicy(MicrosoftSignedOnly)` **after** the renderer is fully up. Blocks unsigned `graphics-hook*.dll`. Loader hard-error dialogs suppressed by default (`SetErrorMode`); `--show-block-errors` restores them. **Default for `cs2-blocked`.** |
+| signature-policy | `--block-capture signature-policy` | **No** | `SetProcessMitigationPolicy(MicrosoftSignedOnly)` **after** the renderer is fully up. Blocks unsigned `graphics-hook*.dll`. Loader hard-error dialogs suppressed **only for this mode** (`SetErrorMode`); `--show-block-errors` restores them. **Default for `cs2-blocked`.** |
 | squat-ipc | `--block-capture squat-ipc` | **Yes (F7)** | Holds `graphics_hook_dup_mutex`+pid (hook DllMain duplicate early-out) + empty-DACL `CaptureHook_*` objects. Self-verifies or exits 5. |
 | unload-hook | `--block-capture unload-hook` | **Yes (F7)** | Polls for `graphics-hook*.dll` and `FreeLibrary`s it |
 
@@ -83,7 +83,7 @@ Also:
 
 | Flag | Notes |
 |------|-------|
-| `--events json` | NDJSON on **stdout** (`ready`, `warning`, `block_active`, `hook_attempt` / `hooked` / `hook_blocked`); human logs on **stderr** |
+| `--events json` | NDJSON on **stdout** (`ready`, `warning`, `block_active`, `hook_attempt` / `hooked` / `unhooked` / `hook_blocked`); human logs on **stderr** |
 | `--ready-file <path>` | Writes the `ready` object (same fields) for harnesses that cannot read stdout |
 | `--instance <id>` | Disambiguate concurrent runs: suffix on **class** (exe-matched) or **title** (class-matched) |
 
@@ -104,7 +104,7 @@ Exit codes: `0` OK · `2` bad args · `3` window create · `4` renderer · `5` b
 |---------|--------|-------|
 | `d3d11` | default | FLIP_DISCARD / DISCARD via `--flip-model` |
 | `d3d12` | supported | DXGI flip swapchain + HUD |
-| `vulkan` | supported | Dynamic `vulkan-1.dll`; cycling clear + title frame counter |
+| `vulkan` | supported | Own default visual: cycling clear + title frame counter. `--scene` ignored. |
 | `none` | supported | GDI only, no swapchain → OBS “not a game” |
 
 ## Profiles
@@ -161,22 +161,25 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--instance <id>` | — | disambiguate concurrent runs |
 | `--version` / `-V` | — | print version (`X.Y.Z+gSHA` or `0.0.0-dev+gSHA`) and exit |
 
-## Scenes (visual stress patterns)
+## Scenes (per-API visuals)
 
-Shared CPU scene → draw-list; d3d11 is reference quality, d3d12/GDI approximate the same motion.
+Scenes are **not** shared across APIs. Each backend has its own default visual.
 
-| `--scene` | What you see | Best for |
+| `--api` | Default visual | `--scene` |
+|---------|----------------|-----------|
+| `d3d11` | `aurora` draw-list (reference quality) | `aurora` / `orbital` / `highway` / `fractal` |
+| `d3d12` | same draw-list, lighter shaders | same names; fractal/aurora PS approximated |
+| `none` | GDI approximation of the draw-list | same names |
+| `vulkan` | cycling clear + title frame counter | accepted, **ignored** |
+
+| `--scene` (d3d11/d3d12/none) | What you see | Best for |
 |-----------|--------------|----------|
 | `aurora` (default) | Nebula, soft orbs, comet, EQ bars | General freeze tell |
 | `orbital` | Starfold backdrop, drones, asteroids, flash | Particles, alpha, tiny sprites, HUD |
-| `highway` | Night neon highway, perspective road, traffic, speedo | Aspect ratio, resize, clipping, motion blur tell |
-| `fractal` | Fullscreen twigl-style raymarch (+ orbiting material tris) | GPU fill-rate / heavy PS stress |
+| `highway` | Night neon highway, perspective road, traffic, speedo | Aspect ratio, resize, clipping |
+| `fractal` | Fullscreen twigl-style raymarch (+ orbiting material tris) | GPU fill-rate / heavy PS (d3d11) |
 
-d3d11 is the reference path: scene solids/triangles use a **material** pixel shader (rim, sheen, soft edges);
-`fractal` / starfield backdrops are multi-iteration raymarch/fold shaders. d3d12 gets a lighter material PS;
-GDI approximates motion only.
-
-`--scene-seed <u32>` makes scene spawns/motion reproducible across runs.
+`--scene-seed <u32>` makes draw-list spawns/motion reproducible on d3d11/d3d12/none.
 
 ## Hotkeys
 
@@ -186,7 +189,7 @@ GDI approximates motion only.
 | F2 | Resize swapchain presets |
 | F3 | Recreate swapchain |
 | F4 | Recreate device |
-| F5 | Change title (+ counter) |
+| F5 | Append `#N` to the current title (then re-check profile match) |
 | F6 | Churn mode ~2 Hz |
 | F7 | Toggle reversible capture block |
 | Esc | Quit |

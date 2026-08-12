@@ -141,11 +141,14 @@ std::unique_ptr<IScene> CreateScene(SceneId id)
 
 void PrintSceneList()
 {
-  std::printf("Available scenes:\n");
-  std::printf("  aurora   Nebula backdrop, orb rings, comet, EQ bars (default)\n");
-  std::printf("  orbital  Starfield defense: drones, asteroids, explosions, flash\n");
-  std::printf("  highway  Night neon highway: perspective road, traffic, speedo\n");
-  std::printf("  fractal  Twigl-style raymarch backdrop (seed even=A tunnel, odd=B spiral)\n");
+  std::printf("Scenes are per-API. There is no shared visual across backends.\n");
+  std::printf("d3d11 is the draw-list reference; d3d12/GDI approximate the same list.\n");
+  std::printf("vulkan always uses its own default (cycling clear + title frame).\n");
+  std::printf("\n");
+  std::printf("  aurora   Nebula, orb rings, comet, EQ bars  [d3d11 d3d12 none]  default\n");
+  std::printf("  orbital  Drones, asteroids, explosions      [d3d11 d3d12 none]\n");
+  std::printf("  highway  Night neon highway + traffic       [d3d11 d3d12 none]\n");
+  std::printf("  fractal  Twigl raymarch (seed even=A/odd=B) [d3d11; d3d12/none approx]\n");
   std::printf("\nUpcoming: skirmish, sonar\n");
   std::printf("Flags: --scene <name>  --scene-seed <u32>  --list-scenes\n");
 }
