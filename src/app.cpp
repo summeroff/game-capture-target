@@ -678,6 +678,7 @@ void App::ApplyWindowMode(WindowMode mode, bool initial)
     renderer_->SetMode(mode, &err);
   }
 
+  ClientSize(&cw, &ch);
   Log("mode -> %s client=%dx%d", Narrow(WindowModeName(mode)).c_str(), cw, ch);
 }
 

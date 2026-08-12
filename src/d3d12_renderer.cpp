@@ -337,6 +337,8 @@ public:
       }
       if (sd && !sd->hud.line1.empty())
         lines.emplace_back(Narrow(sd->hud.line1));
+      if (sd && !sd->hud.line2.empty())
+        lines.emplace_back(Narrow(sd->hud.line2));
       sprintf_s(line, "F1-F7 Esc  t=%.1fs", info.elapsedSec);
       lines.emplace_back(line);
 
@@ -355,11 +357,10 @@ public:
     }
 
     const bool wantDump = info.dumpFramePath && !dumpedFrame_ && info.frameIndex >= 3;
-    if (wantDump)
-      RecordDumpCopy(fi);
+    const bool dumpedCopy = wantDump && RecordDumpCopy(fi);
 
     bar.Transition.StateBefore =
-        wantDump ? D3D12_RESOURCE_STATE_COPY_SOURCE : D3D12_RESOURCE_STATE_RENDER_TARGET;
+        dumpedCopy ? D3D12_RESOURCE_STATE_COPY_SOURCE : D3D12_RESOURCE_STATE_RENDER_TARGET;
     bar.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     cmdList_->ResourceBarrier(1, &bar);
     cmdList_->Close();
@@ -373,7 +374,7 @@ public:
     if (wantDump)
     {
       WaitGpu();
-      if (FinishDumpBmp(info.dumpFramePath))
+      if (dumpedCopy && FinishDumpBmp(info.dumpFramePath))
       {
         dumpedFrame_ = true;
         Log("d3d12: dumped framebuffer to %s (%dx%d)", Narrow(info.dumpFramePath).c_str(), width_,
@@ -415,10 +416,10 @@ private:
     }
   }
 
-  void RecordDumpCopy(UINT fi)
+  bool RecordDumpCopy(UINT fi)
   {
     if (!device_ || !cmdList_ || !renderTargets_[fi])
-      return;
+      return false;
 
     D3D12_RESOURCE_DESC srcDesc = renderTargets_[fi]->GetDesc();
     UINT64 total = 0;
@@ -446,7 +447,7 @@ private:
                                                   IID_PPV_ARGS(&dumpReadback_))))
       {
         dumpReadbackBytes_ = 0;
-        return;
+        return false;
       }
       dumpReadbackBytes_ = total;
     }
@@ -468,6 +469,7 @@ private:
     src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     src.SubresourceIndex = 0;
     cmdList_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    return true;
   }
 
   bool FinishDumpBmp(const wchar_t* path)

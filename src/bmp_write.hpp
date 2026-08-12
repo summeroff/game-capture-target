@@ -60,11 +60,13 @@ inline bool WriteBgra32ToBmp(const wchar_t* path, int w, int h, const uint8_t* s
   if (_wfopen_s(&f, path, L"wb") != 0 || !f)
     return false;
 
-  fwrite(&fh, 1, sizeof(fh), f);
-  fwrite(&ih, 1, sizeof(ih), f);
+  auto writeAll = [f](const void* p, size_t n) -> bool {
+    return fwrite(p, 1, n, f) == n;
+  };
+  bool ok = writeAll(&fh, sizeof(fh)) && writeAll(&ih, sizeof(ih));
 
   std::vector<uint8_t> row(static_cast<size_t>(stride), 0);
-  for (int y = h - 1; y >= 0; --y)
+  for (int y = h - 1; y >= 0 && ok; --y)
   {
     const uint8_t* s = src + y * srcPitch;
     for (int x = 0; x < w; ++x)
@@ -74,8 +76,9 @@ inline bool WriteBgra32ToBmp(const wchar_t* path, int w, int h, const uint8_t* s
       row[static_cast<size_t>(x * 3 + 1)] = px[gOff];
       row[static_cast<size_t>(x * 3 + 2)] = px[rOff];
     }
-    fwrite(row.data(), 1, static_cast<size_t>(stride), f);
+    ok = writeAll(row.data(), static_cast<size_t>(stride));
   }
-  fclose(f);
-  return true;
+  if (fclose(f) != 0)
+    ok = false;
+  return ok;
 }
