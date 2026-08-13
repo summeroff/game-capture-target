@@ -600,7 +600,7 @@ public:
     }
 
     // Ground-truth: what this backend actually submitted (not CLI selection).
-    if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
+    if (info.verbose && (info.frameIndex <= 1 || (info.frameIndex % 120) == 0))
     {
       scene::PrimCounts pc{};
       if (sd)
@@ -672,7 +672,7 @@ public:
         y += lineH;
       }
 
-      if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
+      if (info.verbose && (info.frameIndex <= 1 || (info.frameIndex % 120) == 0))
       {
         Log("d3d11-hud: lines=%d plate=%.0fx%.0f bigFrame=%s", static_cast<int>(lines.size()),
             plateW, plateH, big);

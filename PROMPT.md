@@ -546,3 +546,151 @@ suffix would break matching. Include the resolved values in the `ready` event.
     exits non-zero when it cannot verify.
 30. Two profiles launched with different `--instance` values are independently selectable in the
     OBS window list.
+
+---
+
+# Addendum — round 5 (v0.2.0 verified from the consumer side)
+
+v0.2.0 is in use by the Streamlabs Desktop e2e suite
+(`test/helpers/game-capture-target.ts`). The helper now consumes `--events json` and no longer
+scrapes log lines. **7/7 tests pass**, cold cache, against the released x64 zip.
+
+## Confirmed working
+
+- **AC 26 — the blocked profile really blocks.** `cs2-blocked` with its new `signature-policy`
+  default: Game Capture never hooks it and the source never reports the target's client area.
+  This was the v0.1.0 bug; consider that box ticked.
+- **Block self-verification.** `block_active` reports `verified:true` with useful `detail` —
+  `MicrosoftSignedOnly=1` for signature-policy, `dup-mutex held; all CaptureHook_* Open/Create
+  denied` for squat-ipc. The suite now asserts on this, so a block that silently stops working
+  fails the test instead of turning it into a no-op.
+- **`hooked` / `hook_blocked`.** This is the one that mattered most. Desktop cannot distinguish
+  "capturing" from "showing the placeholder" — Game Capture renders a placeholder at its own size,
+  and an earlier revision of our suite passed for exactly that wrong reason. Asserting on the
+  target's own `hooked` event removes the guesswork.
+- **AC 30 — `--instance`,** including the subtle part: the suffix lands on the field that is *not*
+  the profile's match key. `cs2` (exe-matched) → `FakeGameWindowClass_A`, title untouched.
+  `chromium-gc` (class-matched) → title `Chromium GC [A]`, class `Chrome_WidgetWin_1` untouched.
+  Both produce distinct `obsWindowSetting`s. (Verified as distinct settings; the OBS-list
+  selection itself follows from that but was not separately exercised.)
+- Human log on stderr, NDJSON on stdout — clean separation, easy to consume.
+
+## One suggestion: warn when the running filename cannot match the profile
+
+**Shipped in v0.3.0 / PR #7.** `exe_mismatch`, `title_mismatch`, `class_mismatch`.
+
+## Smaller, only if convenient
+
+- **`unhooked` shipped in v0.3.1 / PR #8.** Recovery after F3/F6 / delayed unload-hook is assertable.
+- **`--list-profiles --json` includes `match`** (v0.3.0). `clientWidth` is the profile default; instance size is on `ready`.
+
+`ready.exe` reports the *actual* filename, which is right — it reflects reality after the rename.
+But it creates a quiet failure mode:
+
+```
+fakegame.exe --profile cs2        # not renamed
+{"event":"ready","exe":"fakegame.exe", ...,
+ "obsWindowSetting":"Counter-Strike 2:FakeGameWindowClass:fakegame.exe"}
+```
+
+`--list-profiles` declares `exe: cs2.exe` and the CS2 compatibility entry matches on executable
+name, so this run will never trigger the warning it exists to produce — and nothing says why.
+
+Suggest emitting a warning event when the running filename differs from the profile's declared
+`exe` *and* the profile's `match` includes exe:
+
+```json
+{"event":"warning","code":"exe_mismatch","expected":"cs2.exe","actual":"fakegame.exe",
+ "detail":"profile matches on exe; rename the binary or the compatibility entry will not apply"}
+```
+
+Same idea for a class-matched profile whose class has been overridden. Cheap, and it turns a
+silent no-match into an obvious one — this is the single easiest mistake to make when driving the
+tool from a harness.
+
+## Smaller, only if convenient
+
+- An `unhooked` / `capture_stopped` event would let a churn test (F3/F6) assert that capture
+  recovers, rather than just that it does not crash.
+- `--list-profiles --json` could include `match` alongside `clientWidth`/`clientHeight` so a
+  harness can reason about which field an `--instance` suffix will land on.
+
+---
+
+# Addendum — round 6 (v0.3.2 in use)
+
+The Desktop suite is on v0.3.2 and green (9 tests). Both round-5 asks landed —
+`exe_mismatch` and `match` in `--list-profiles` — and nothing in v0.3.1/v0.3.2 broke the
+consumer contract: `ready` fields, exit codes and the flags the helper passes are unchanged, and
+events are matched by name so the new `unhooked` needed no handling. Scoping `SetErrorMode` to
+signature-policy only is an improvement from here — dialogs are still suppressed in the mode the
+blocked test uses, without the process suppressing hard-error dialogs globally in every mode.
+
+## The one thing blocking more coverage: churn is hotkey-only
+
+**Shipped in this change (CLI + events).** Harness path:
+
+```
+launch cs2 --recreate-swapchain-after 5
+wait hooked        -> capture is live
+wait unhooked      -> the recreate tore it down
+wait hooked        -> OBS re-hooked and capture recovered
+```
+
+Flags: `--recreate-swapchain-after <s>[,repeat]`, `--recreate-device-after`,
+`--resize-after`, `--mode-cycle-after`, `--churn <hz>`.
+Events: `swapchain_recreated`, `device_recreated`, `resized`, `mode_changed`.
+Per-frame stderr (`scene-emit` / `d3d*-draw`) is gated behind `--verbose` (default off).
+`--config` INI was deleted (no consumer; `#`-strip could truncate titles).
+
+Original ask (kept for history):
+
+`unhooked` is now emitted, which makes the most valuable untested scenario finally *assertable*:
+**does capture recover after the target churns its swapchain, device, or display mode?** That is
+what actually breaks for users — alt-tab, resolution change, exclusive fullscreen toggle — and
+nothing tests it anywhere.
+
+We cannot reach it. Those behaviours are bound to F1/F2/F3/F4/F6, and the only time-based flags
+are `--exit-after` and `--block-capture-after`. An e2e harness drives the Electron app through
+WebDriver; it has no way to deliver a keystroke to an unrelated top-level window short of Win32
+`SendInput`, which is flaky and racy.
+
+Please add CLI equivalents, so the harness can arm the behaviour at launch:
+
+| Flag | Equivalent to | Suggested behaviour |
+|------|---------------|---------------------|
+| `--recreate-swapchain-after <s>[,repeat]` | F3 | recreate once after N seconds, or every N with `,repeat` |
+| `--recreate-device-after <s>[,repeat]` | F4 | same, device-lost simulation |
+| `--resize-after <s>[,repeat]` | F2 | step through the preset resolutions |
+| `--mode-cycle-after <s>[,repeat]` | F1 | windowed → borderless → exclusive |
+| `--churn <hz>` | F6 | the existing combined churn, armed from the command line |
+
+Emit an event for each transition so a test can correlate rather than sleep:
+
+```json
+{"event":"swapchain_recreated","ts":"..."}
+{"event":"device_recreated","ts":"..."}
+{"event":"resized","clientWidth":1920,"clientHeight":1080,"ts":"..."}
+{"event":"mode_changed","mode":"borderless","ts":"..."}
+```
+
+With those, the test we want becomes straightforward and fully deterministic:
+
+```
+launch cs2 --recreate-swapchain-after 5
+wait hooked        -> capture is live
+wait unhooked      -> the recreate tore it down
+wait hooked        -> OBS re-hooked and capture recovered
+```
+
+That single test would cover the failure mode most likely to reach users, and it is currently
+unreachable purely because the trigger is a keystroke.
+
+## Smaller
+
+- The hotkeys table did not survive into the v0.3.2 README (the `| F1 |` rows are gone, though
+  the flags table is intact). Worth restoring — they are still the only way to drive churn
+  interactively.
+- `--dump-frame` on d3d12 is welcome, but a harness cannot compare it against what OBS captured
+  (the captured texture is not readable from the Desktop side). It is useful for eyeballing a
+  renderer regression, not for assertions — no change needed, just calibrating expectations.

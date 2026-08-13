@@ -51,6 +51,15 @@ App::App(Config cfg) : cfg_(std::move(cfg))
   windowedPlacement_.length = sizeof(windowedPlacement_);
   QueryPerformanceFrequency(&qpcFreq_);
   frameBudgetSec_ = cfg_.fps > 0 ? (1.0 / static_cast<double>(cfg_.fps)) : (1.0 / 60.0);
+  if (cfg_.churnHz > 0)
+  {
+    churn_ = true;
+    churnPeriodSec_ = 1.0 / cfg_.churnHz;
+  }
+  nextSwapchainAfter_ = cfg_.recreateSwapchainAfter.afterSec;
+  nextDeviceAfter_ = cfg_.recreateDeviceAfter.afterSec;
+  nextResizeAfter_ = cfg_.resizeAfter.afterSec;
+  nextModeAfter_ = cfg_.modeCycleAfter.afterSec;
 }
 
 App::~App()
@@ -753,6 +762,7 @@ void App::Frame()
   if (churn_)
     TickChurn();
 
+  TickScheduled();
   TickBlockCapture();
 
   int cw = 0, ch = 0;
@@ -779,7 +789,7 @@ void App::Frame()
 
     // Emit-path diagnostics (not just CLI selection).
     const bool logNow =
-        (frameIndex_ == 0) || (frameIndex_ == 1) || (frameIndex_ % 120 == 0); // ~2s at 60fps
+        cfg_.verbose && ((frameIndex_ == 0) || (frameIndex_ == 1) || (frameIndex_ % 120 == 0));
     if (logNow)
     {
       const scene::PrimCounts pc = scene::CountPrims(sceneDraw_.prims);
@@ -814,6 +824,7 @@ void App::Frame()
   fi.flipModel = cfg_.flipModel;
   fi.buffers = cfg_.buffers;
   fi.noHud = cfg_.noHud;
+  fi.verbose = cfg_.verbose;
   fi.sceneName = scene_ ? scene_->Name() : scene::SceneIdName(cfg_.scene);
   fi.sceneSeed = cfg_.sceneSeed;
   fi.sceneDraw = scene_ ? &sceneDraw_ : nullptr;
@@ -829,7 +840,7 @@ void App::TickChurn()
 {
   // ~2 Hz resize/recreate cycle.
   churnAccum_ += frameBudgetSec_;
-  if (churnAccum_ < 0.5)
+  if (churnAccum_ < churnPeriodSec_)
     return;
   churnAccum_ = 0.0;
 
@@ -855,30 +866,61 @@ void App::TickChurn()
     }
     if (renderer_)
       renderer_->Resize(w, h, &err);
+    std::ostringstream o;
+    o << "{\"event\":\"resized\",\"clientWidth\":" << w << ",\"clientHeight\":" << h << ",\"ts\":\""
+      << EventsTimestamp() << "\"}";
+    EmitEventJson(o.str());
   } else
   {
     Log("churn: recreate swapchain");
     if (renderer_)
       renderer_->RecreateSwapchain(&err);
+    std::ostringstream o;
+    o << "{\"event\":\"swapchain_recreated\",\"ts\":\"" << EventsTimestamp() << "\"}";
+    EmitEventJson(o.str());
   }
   ++churnPhase_;
 }
 
-void App::OnHotkeyMode()
+void App::TickScheduled()
 {
-  const WindowMode next = NextWindowMode(cfg_.mode);
-  Log("hotkey F1: mode %s -> %s", Narrow(WindowModeName(cfg_.mode)).c_str(),
-      Narrow(WindowModeName(next)).c_str());
-  ApplyWindowMode(next, false);
+  auto fire = [&](double* next, const ScheduledAfter& spec, void (App::*fn)(const char*)) {
+    if (*next <= 0 || elapsedSec_ < *next)
+      return;
+    (this->*fn)("scheduled");
+    if (spec.repeat)
+      *next += spec.afterSec;
+    else
+      *next = 0;
+  };
+  fire(&nextModeAfter_, cfg_.modeCycleAfter, &App::DoModeCycle);
+  fire(&nextResizeAfter_, cfg_.resizeAfter, &App::DoResizePreset);
+  fire(&nextSwapchainAfter_, cfg_.recreateSwapchainAfter, &App::DoRecreateSwapchain);
+  fire(&nextDeviceAfter_, cfg_.recreateDeviceAfter, &App::DoRecreateDevice);
 }
 
-void App::OnHotkeyResize()
+void App::DoModeCycle(const char* why)
+{
+  const WindowMode next = NextWindowMode(cfg_.mode);
+  Log("%s: mode %s -> %s", why, Narrow(WindowModeName(cfg_.mode)).c_str(),
+      Narrow(WindowModeName(next)).c_str());
+  ApplyWindowMode(next, false);
+  int cw = 0, ch = 0;
+  ClientSize(&cw, &ch);
+  std::ostringstream o;
+  o << "{\"event\":\"mode_changed\",\"mode\":\""
+    << JsonEscapeUtf8(Narrow(WindowModeName(cfg_.mode))) << "\",\"clientWidth\":" << cw
+    << ",\"clientHeight\":" << ch << ",\"ts\":\"" << EventsTimestamp() << "\"}";
+  EmitEventJson(o.str());
+}
+
+void App::DoResizePreset(const char* why)
 {
   static const int kSizes[][2] = {{1280, 720}, {1920, 1080}, {1024, 576}, {1600, 900}};
   resizeToggle_ = (resizeToggle_ + 1) % 4;
   const int w = kSizes[resizeToggle_][0];
   const int h = kSizes[resizeToggle_][1];
-  Log("hotkey F2: resize -> %dx%d", w, h);
+  Log("%s: resize -> %dx%d", why, w, h);
 
   cfg_.width = w;
   cfg_.height = h;
@@ -897,22 +939,53 @@ void App::OnHotkeyResize()
   std::wstring err;
   if (renderer_ && !renderer_->Resize(w, h, &err))
     Log("resize failed: %s", Narrow(err).c_str());
+
+  std::ostringstream o;
+  o << "{\"event\":\"resized\",\"clientWidth\":" << w << ",\"clientHeight\":" << h << ",\"ts\":\""
+    << EventsTimestamp() << "\"}";
+  EmitEventJson(o.str());
+}
+
+void App::DoRecreateSwapchain(const char* why)
+{
+  Log("%s: recreate swapchain", why);
+  std::wstring err;
+  if (renderer_ && !renderer_->RecreateSwapchain(&err))
+    Log("recreate swapchain failed: %s", Narrow(err).c_str());
+  std::ostringstream o;
+  o << "{\"event\":\"swapchain_recreated\",\"ts\":\"" << EventsTimestamp() << "\"}";
+  EmitEventJson(o.str());
+}
+
+void App::DoRecreateDevice(const char* why)
+{
+  Log("%s: recreate device", why);
+  std::wstring err;
+  if (renderer_ && !renderer_->RecreateDevice(&err))
+    Log("recreate device failed: %s", Narrow(err).c_str());
+  std::ostringstream o;
+  o << "{\"event\":\"device_recreated\",\"ts\":\"" << EventsTimestamp() << "\"}";
+  EmitEventJson(o.str());
+}
+
+void App::OnHotkeyMode()
+{
+  DoModeCycle("hotkey F1");
+}
+
+void App::OnHotkeyResize()
+{
+  DoResizePreset("hotkey F2");
 }
 
 void App::OnHotkeyRecreateSwapchain()
 {
-  Log("hotkey F3: recreate swapchain");
-  std::wstring err;
-  if (renderer_ && !renderer_->RecreateSwapchain(&err))
-    Log("recreate swapchain failed: %s", Narrow(err).c_str());
+  DoRecreateSwapchain("hotkey F3");
 }
 
 void App::OnHotkeyRecreateDevice()
 {
-  Log("hotkey F4: recreate device");
-  std::wstring err;
-  if (renderer_ && !renderer_->RecreateDevice(&err))
-    Log("recreate device failed: %s", Narrow(err).c_str());
+  DoRecreateDevice("hotkey F4");
 }
 
 void App::OnHotkeyTitle()

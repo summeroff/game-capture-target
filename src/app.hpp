@@ -47,6 +47,11 @@ private:
   void OnHotkeyChurn();
   void OnHotkeyBlockToggle();
 
+  void DoModeCycle(const char* why);
+  void DoResizePreset(const char* why);
+  void DoRecreateSwapchain(const char* why);
+  void DoRecreateDevice(const char* why);
+  void TickScheduled();
   void TickChurn();
   void TickBlockCapture();
   bool ApplyBlockNow(std::wstring* error);
@@ -69,6 +74,11 @@ private:
 
   bool running_ = true;
   bool churn_ = false;
+  double churnPeriodSec_ = 0.5;
+  double nextSwapchainAfter_ = 0;
+  double nextDeviceAfter_ = 0;
+  double nextResizeAfter_ = 0;
+  double nextModeAfter_ = 0;
   double churnAccum_ = 0.0;
   int churnPhase_ = 0;
   int titleCounter_ = 0;

@@ -294,7 +294,7 @@ public:
     }
 
     const scene::BackdropId bd = sd ? sd->backdrop : scene::BackdropId::Solid;
-    if (info.frameIndex <= 1 || (info.frameIndex % 120) == 0)
+    if (info.verbose && (info.frameIndex <= 1 || (info.frameIndex % 120) == 0))
     {
       scene::PrimCounts pc{};
       if (sd)

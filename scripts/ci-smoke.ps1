@@ -70,6 +70,7 @@ if ($verLine -notmatch '^\d+\.\d+\.\d+') {
 Invoke-Smoke -Label "list-profiles" -ArgList @("--list-profiles") | Out-Null
 Invoke-Smoke -Label "list-scenes" -ArgList @("--list-scenes") | Out-Null
 Invoke-Smoke -Label "bad scene" -ArgList @("--scene", "nope") -ExpectExit 2 | Out-Null
+Invoke-Smoke -Label "deleted --config" -ArgList @("--config", "x.ini") -ExpectExit 2 | Out-Null
 
 # JSON must be parseable (profiles script contracts on this)
 Write-Host ""
@@ -168,6 +169,74 @@ if (-not (Test-Path -LiteralPath $dump12) -or ((Get-Item $dump12).Length -lt 100
 }
 Write-Host "d3d12 dump-frame OK $((Get-Item $dump12).Length) bytes"
 Remove-Item -LiteralPath $dumpDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# CLI churn + events (no OBS). --verbose is the only path that should emit scene-emit.
+Write-Host ""
+Write-Host "=== recreate-swapchain-after event ===" -ForegroundColor Cyan
+$churnDir = Join-Path $env:TEMP ("fg-churn-" + [guid]::NewGuid().ToString("n"))
+New-Item -ItemType Directory -Force -Path $churnDir | Out-Null
+$churnOut = Join-Path $churnDir "out.ndjson"
+$churnErr = Join-Path $churnDir "err.log"
+$churnArgs = @(
+  "--api", "d3d11", "--recreate-swapchain-after", "1",
+  "--exit-after", "3", "--width", "640", "--height", "360", "--vsync", "0",
+  "--events", "json"
+)
+Write-Host ("> " + $Exe + " " + ($churnArgs -join " "))
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& $Exe @churnArgs 1>$churnOut 2>$churnErr
+$code = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($code -ne 0) {
+  if (Test-Path $churnErr) { Get-Content $churnErr | Select-Object -Last 20 | Write-Host }
+  Write-Error "recreate-swapchain-after exited $code"
+  exit 1
+}
+$nd = @()
+if (Test-Path $churnOut) {
+  $nd = @(Get-Content -LiteralPath $churnOut | Where-Object { $_ -match '^\s*\{' })
+}
+if (-not ($nd | Where-Object { $_ -match '"event"\s*:\s*"swapchain_recreated"' })) {
+  Write-Error "missing swapchain_recreated event"
+  exit 1
+}
+if (Test-Path $churnErr) {
+  $errTxt = Get-Content -LiteralPath $churnErr -Raw
+  if ($errTxt -match 'scene-emit:') {
+    Write-Error "scene-emit leaked without --verbose"
+    exit 1
+  }
+}
+Write-Host "swapchain_recreated OK; scene-emit quiet by default"
+Remove-Item -LiteralPath $churnDir -Recurse -Force -ErrorAction SilentlyContinue
+
+Write-Host ""
+Write-Host "=== --verbose scene-emit ===" -ForegroundColor Cyan
+$verbDir = Join-Path $env:TEMP ("fg-verb-" + [guid]::NewGuid().ToString("n"))
+New-Item -ItemType Directory -Force -Path $verbDir | Out-Null
+$verbErr = Join-Path $verbDir "err.log"
+$verbArgs = @(
+  "--api", "d3d11", "--verbose", "--exit-after", "$Seconds",
+  "--width", "640", "--height", "360", "--vsync", "0"
+)
+Write-Host ("> " + $Exe + " " + ($verbArgs -join " "))
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& $Exe @verbArgs 1>$null 2>$verbErr
+$code = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($code -ne 0) {
+  Write-Error "--verbose exited $code"
+  exit 1
+}
+$verbTxt = if (Test-Path $verbErr) { Get-Content -LiteralPath $verbErr -Raw } else { "" }
+if ($verbTxt -notmatch 'scene-emit:') {
+  Write-Error "--verbose missing scene-emit"
+  exit 1
+}
+Write-Host "--verbose scene-emit OK"
+Remove-Item -LiteralPath $verbDir -Recurse -Force -ErrorAction SilentlyContinue
 
 # block modes: must self-verify (exit 0 + process lived). Prefer --events json + ready-file.
 function Invoke-BlockSmoke {

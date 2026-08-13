@@ -145,18 +145,23 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--exit-after` | 0 | |
 | `--topmost` | off | |
 | `--no-hud` | off | |
+| `--verbose` | off | per-frame `scene-emit` / `d3d*-draw` / `d3d*-hud` on stderr |
+| `--recreate-swapchain-after <s>[,repeat]` | off | F3 after N seconds |
+| `--recreate-device-after <s>[,repeat]` | off | F4 after N seconds |
+| `--resize-after <s>[,repeat]` | off | F2 after N seconds |
+| `--mode-cycle-after <s>[,repeat]` | off | F1 after N seconds |
+| `--churn <hz>` | off | arm F6-style churn at launch |
 | `--scene <name>` | `aurora` | `aurora` \| `orbital` \| `highway` \| `fractal` |
 | `--scene-seed <u32>` | `0xC5A2EE` | Deterministic scene RNG; fractal even=A / odd=B |
 | `--list-scenes` | — | Scene table |
 | `--dump-frame <path.bmp>` | — | d3d11/d3d12: one framebuffer BMP after a few frames |
 | `--gpu-mem <size>` | off | Hold GPU RAM: `100`/`500`/`1024`/`2048` or `100mb`/`500mb`/`1gb`/`2gb` |
-| `--config <path>` | — | INI; flags override |
 | `--profile <name>` | — | |
 | `--list-profiles` | — | table or with `--json` |
 | `--block-capture` | none | none \| signature-policy \| squat-ipc \| unload-hook |
 | `--block-capture-after` | 0 | seconds |
 | `--show-block-errors` | off | allow Windows loader hard-error dialogs |
-| `--events json` | off | NDJSON on stdout; Log → stderr |
+| `--events json` | off | NDJSON on stdout (`ready`, `hooked`, `unhooked`, `swapchain_recreated`, …); Log → stderr |
 | `--ready-file <path>` | — | write `ready` JSON for harnesses |
 | `--instance <id>` | — | disambiguate concurrent runs |
 | `--version` / `-V` | — | print version (`X.Y.Z+gSHA` or `0.0.0-dev+gSHA`) and exit |
@@ -185,12 +190,12 @@ Scenes are **not** shared across APIs. Each backend has its own default visual.
 
 | Key | Action |
 |-----|--------|
-| F1 | Cycle windowed / borderless / fullscreen-exclusive |
-| F2 | Resize swapchain presets |
-| F3 | Recreate swapchain |
-| F4 | Recreate device |
+| F1 | Cycle windowed / borderless / fullscreen-exclusive (`--mode-cycle-after`) |
+| F2 | Resize swapchain presets (`--resize-after`) |
+| F3 | Recreate swapchain (`--recreate-swapchain-after`) |
+| F4 | Recreate device (`--recreate-device-after`) |
 | F5 | Append `#N` to the current title (then re-check profile match) |
-| F6 | Churn mode ~2 Hz |
+| F6 | Churn mode ~2 Hz (`--churn <hz>`) |
 | F7 | Toggle reversible capture block |
 | Esc | Quit |
 
