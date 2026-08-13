@@ -56,10 +56,15 @@ App::App(Config cfg) : cfg_(std::move(cfg))
     churn_ = true;
     churnPeriodSec_ = 1.0 / cfg_.churnHz;
   }
-  nextSwapchainAfter_ = cfg_.recreateSwapchainAfter.afterSec;
-  nextDeviceAfter_ = cfg_.recreateDeviceAfter.afterSec;
-  nextResizeAfter_ = cfg_.resizeAfter.afterSec;
-  nextModeAfter_ = cfg_.modeCycleAfter.afterSec;
+  nextSwapchainAfter_ =
+      cfg_.recreateSwapchainAfter.afterHooked ? 0 : cfg_.recreateSwapchainAfter.afterSec;
+  nextDeviceAfter_ = cfg_.recreateDeviceAfter.afterHooked ? 0 : cfg_.recreateDeviceAfter.afterSec;
+  nextResizeAfter_ = cfg_.resizeAfter.afterHooked ? 0 : cfg_.resizeAfter.afterSec;
+  nextModeAfter_ = cfg_.modeCycleAfter.afterHooked ? 0 : cfg_.modeCycleAfter.afterSec;
+  waitHookSwapchain_ = cfg_.recreateSwapchainAfter.afterHooked;
+  waitHookDevice_ = cfg_.recreateDeviceAfter.afterHooked;
+  waitHookResize_ = cfg_.resizeAfter.afterHooked;
+  waitHookMode_ = cfg_.modeCycleAfter.afterHooked;
 }
 
 App::~App()
@@ -503,6 +508,8 @@ void App::TickHookEvents()
   if (st.present && !blockActive_ && !hookedEmitted_ && hookReady)
   {
     hookedEmitted_ = true;
+    if (firstHookedAtSec_ <= 0)
+      firstHookedAtSec_ = elapsedSec_;
     std::ostringstream h;
     h << "{\"event\":\"hooked\",\"module\":\"" << JsonEscapeUtf8(st.baseName) << "\",\"ts\":\""
       << EventsTimestamp() << "\"}";
@@ -762,8 +769,8 @@ void App::Frame()
   if (churn_)
     TickChurn();
 
-  TickScheduled();
   TickBlockCapture();
+  TickScheduled();
 
   int cw = 0, ch = 0;
   ClientSize(&cw, &ch);
@@ -838,8 +845,7 @@ void App::Frame()
 
 void App::TickChurn()
 {
-  // ~2 Hz resize/recreate cycle.
-  churnAccum_ += frameBudgetSec_;
+  churnAccum_ += lastDt_;
   if (churnAccum_ < churnPeriodSec_)
     return;
   churnAccum_ = 0.0;
@@ -847,7 +853,6 @@ void App::TickChurn()
   std::wstring err;
   if ((churnPhase_ % 2) == 0)
   {
-    // Alternate two client sizes.
     const int w = (churnPhase_ % 4 == 0) ? 1024 : 1600;
     const int h = (churnPhase_ % 4 == 0) ? 576 : 900;
     Log("churn: resize swapchain -> %dx%d", w, h);
@@ -864,27 +869,45 @@ void App::TickChurn()
       SetWindowPos(hwnd_, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
-    if (renderer_)
-      renderer_->Resize(w, h, &err);
-    std::ostringstream o;
-    o << "{\"event\":\"resized\",\"clientWidth\":" << w << ",\"clientHeight\":" << h << ",\"ts\":\""
-      << EventsTimestamp() << "\"}";
-    EmitEventJson(o.str());
+    if (renderer_ && !renderer_->Resize(w, h, &err))
+    {
+      Log("churn: resize failed: %s", Narrow(err).c_str());
+    } else
+    {
+      int cw = 0, ch = 0;
+      ClientSize(&cw, &ch);
+      std::ostringstream o;
+      o << "{\"event\":\"resized\",\"clientWidth\":" << cw << ",\"clientHeight\":" << ch
+        << ",\"ts\":\"" << EventsTimestamp() << "\"}";
+      EmitEventJson(o.str());
+    }
   } else
   {
     Log("churn: recreate swapchain");
-    if (renderer_)
-      renderer_->RecreateSwapchain(&err);
-    std::ostringstream o;
-    o << "{\"event\":\"swapchain_recreated\",\"ts\":\"" << EventsTimestamp() << "\"}";
-    EmitEventJson(o.str());
+    if (renderer_ && !renderer_->RecreateSwapchain(&err))
+    {
+      Log("churn: recreate swapchain failed: %s", Narrow(err).c_str());
+    } else if (renderer_)
+    {
+      std::ostringstream o;
+      o << "{\"event\":\"swapchain_recreated\",\"ts\":\"" << EventsTimestamp() << "\"}";
+      EmitEventJson(o.str());
+    }
   }
   ++churnPhase_;
 }
 
 void App::TickScheduled()
 {
-  auto fire = [&](double* next, const ScheduledAfter& spec, void (App::*fn)(const char*)) {
+  auto fire = [&](double* next, bool* waitHook, const ScheduledAfter& spec,
+                  void (App::*fn)(const char*)) {
+    if (*waitHook)
+    {
+      if (firstHookedAtSec_ <= 0)
+        return;
+      *next = firstHookedAtSec_ + spec.afterSec;
+      *waitHook = false;
+    }
     if (*next <= 0 || elapsedSec_ < *next)
       return;
     (this->*fn)("scheduled");
@@ -893,10 +916,11 @@ void App::TickScheduled()
     else
       *next = 0;
   };
-  fire(&nextModeAfter_, cfg_.modeCycleAfter, &App::DoModeCycle);
-  fire(&nextResizeAfter_, cfg_.resizeAfter, &App::DoResizePreset);
-  fire(&nextSwapchainAfter_, cfg_.recreateSwapchainAfter, &App::DoRecreateSwapchain);
-  fire(&nextDeviceAfter_, cfg_.recreateDeviceAfter, &App::DoRecreateDevice);
+  fire(&nextModeAfter_, &waitHookMode_, cfg_.modeCycleAfter, &App::DoModeCycle);
+  fire(&nextResizeAfter_, &waitHookResize_, cfg_.resizeAfter, &App::DoResizePreset);
+  fire(&nextSwapchainAfter_, &waitHookSwapchain_, cfg_.recreateSwapchainAfter,
+       &App::DoRecreateSwapchain);
+  fire(&nextDeviceAfter_, &waitHookDevice_, cfg_.recreateDeviceAfter, &App::DoRecreateDevice);
 }
 
 void App::DoModeCycle(const char* why)
@@ -938,10 +962,14 @@ void App::DoResizePreset(const char* why)
 
   std::wstring err;
   if (renderer_ && !renderer_->Resize(w, h, &err))
+  {
     Log("resize failed: %s", Narrow(err).c_str());
-
+    return;
+  }
+  int cw = 0, ch = 0;
+  ClientSize(&cw, &ch);
   std::ostringstream o;
-  o << "{\"event\":\"resized\",\"clientWidth\":" << w << ",\"clientHeight\":" << h << ",\"ts\":\""
+  o << "{\"event\":\"resized\",\"clientWidth\":" << cw << ",\"clientHeight\":" << ch << ",\"ts\":\""
     << EventsTimestamp() << "\"}";
   EmitEventJson(o.str());
 }
@@ -950,8 +978,11 @@ void App::DoRecreateSwapchain(const char* why)
 {
   Log("%s: recreate swapchain", why);
   std::wstring err;
-  if (renderer_ && !renderer_->RecreateSwapchain(&err))
+  if (!renderer_ || !renderer_->RecreateSwapchain(&err))
+  {
     Log("recreate swapchain failed: %s", Narrow(err).c_str());
+    return;
+  }
   std::ostringstream o;
   o << "{\"event\":\"swapchain_recreated\",\"ts\":\"" << EventsTimestamp() << "\"}";
   EmitEventJson(o.str());
@@ -961,8 +992,11 @@ void App::DoRecreateDevice(const char* why)
 {
   Log("%s: recreate device", why);
   std::wstring err;
-  if (renderer_ && !renderer_->RecreateDevice(&err))
+  if (!renderer_ || !renderer_->RecreateDevice(&err))
+  {
     Log("recreate device failed: %s", Narrow(err).c_str());
+    return;
+  }
   std::ostringstream o;
   o << "{\"event\":\"device_recreated\",\"ts\":\"" << EventsTimestamp() << "\"}";
   EmitEventJson(o.str());

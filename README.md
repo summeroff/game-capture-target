@@ -146,11 +146,11 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--topmost` | off | |
 | `--no-hud` | off | |
 | `--verbose` | off | per-frame `scene-emit` / `d3d*-draw` / `d3d*-hud` on stderr |
-| `--recreate-swapchain-after <s>[,repeat]` | off | F3 after N seconds |
-| `--recreate-device-after <s>[,repeat]` | off | F4 after N seconds |
-| `--resize-after <s>[,repeat]` | off | F2 after N seconds |
-| `--mode-cycle-after <s>[,repeat]` | off | F1 after N seconds |
-| `--churn <hz>` | off | arm F6-style churn at launch |
+| `--recreate-swapchain-after <when>[,repeat]` | off | F3 after N seconds, or `hooked` / `hooked+2` after first `hooked` |
+| `--recreate-device-after <when>[,repeat]` | off | F4; same `when` grammar |
+| `--resize-after <when>[,repeat]` | off | F2; same `when` grammar |
+| `--mode-cycle-after <when>[,repeat]` | off | F1; same `when` grammar |
+| `--churn <hz>` | off | arm F6-style churn at launch (chatty: ~2 events/s on stdout) |
 | `--scene <name>` | `aurora` | `aurora` \| `orbital` \| `highway` \| `fractal` |
 | `--scene-seed <u32>` | `0xC5A2EE` | Deterministic scene RNG; fractal even=A / odd=B |
 | `--list-scenes` | — | Scene table |
@@ -199,7 +199,9 @@ Scenes are **not** shared across APIs. Each backend has its own default visual.
 | F7 | Toggle reversible capture block |
 | Esc | Quit |
 
-Every transition is logged (stdout, or stderr when `--events json`).
+Every transition is logged (stdout, or stderr when `--events json`). `--churn` emits
+`resized` / `swapchain_recreated` on each step (~2/s at `--churn 2`); prefer
+`--recreate-swapchain-after hooked+2` for a single deterministic recovery test.
 
 ## Low-level rename helper
 

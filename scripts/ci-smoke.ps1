@@ -71,6 +71,13 @@ Invoke-Smoke -Label "list-profiles" -ArgList @("--list-profiles") | Out-Null
 Invoke-Smoke -Label "list-scenes" -ArgList @("--list-scenes") | Out-Null
 Invoke-Smoke -Label "bad scene" -ArgList @("--scene", "nope") -ExpectExit 2 | Out-Null
 Invoke-Smoke -Label "deleted --config" -ArgList @("--config", "x.ini") -ExpectExit 2 | Out-Null
+Invoke-Smoke -Label "after trailing comma" -ArgList @("--resize-after", "5,") -ExpectExit 2 | Out-Null
+Invoke-Smoke -Label "churn nan" -ArgList @("--churn", "nan") -ExpectExit 2 | Out-Null
+Invoke-Smoke -Label "after nan" -ArgList @("--recreate-swapchain-after", "nan") -ExpectExit 2 | Out-Null
+Invoke-Smoke -Label "hooked+2 parse" -ArgList @(
+  "--api", "none", "--recreate-swapchain-after", "hooked+2",
+  "--exit-after", "1", "--width", "640", "--height", "360"
+) | Out-Null
 
 # JSON must be parseable (profiles script contracts on this)
 Write-Host ""

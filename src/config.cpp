@@ -4,6 +4,7 @@
 #include "profiles.hpp"
 #include "version_build.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -127,31 +128,19 @@ bool ParseGpuMemMb(const std::wstring& v, int* out)
   return false;
 }
 
-// "5" or "5,repeat" (seconds). 0 / missing = off.
+// "5" / "5,repeat" / "hooked" / "hooked+2" / "hooked+2,repeat".
 bool ParseScheduledAfter(const std::wstring& v, ScheduledAfter* out, std::wstring* error)
 {
   if (!out)
     return false;
-  std::wstring sec = v;
-  std::wstring extra;
+  std::wstring body = v;
+  bool repeat = false;
   const auto comma = v.find(L',');
   if (comma != std::wstring::npos)
   {
-    sec = v.substr(0, comma);
-    extra = v.substr(comma + 1);
-  }
-  wchar_t* end = nullptr;
-  const double n = wcstod(sec.c_str(), &end);
-  if (end == sec.c_str() || (end && *end != L'\0') || n <= 0)
-  {
-    if (error)
-      *error = L"invalid after-seconds (want >0, optional ,repeat)";
-    return false;
-  }
-  bool repeat = false;
-  if (!extra.empty())
-  {
-    if (!EqI(extra, L"repeat"))
+    body = v.substr(0, comma);
+    const std::wstring extra = v.substr(comma + 1);
+    if (extra.empty() || !EqI(extra, L"repeat"))
     {
       if (error)
         *error = L"invalid after suffix (use ,repeat)";
@@ -159,8 +148,46 @@ bool ParseScheduledAfter(const std::wstring& v, ScheduledAfter* out, std::wstrin
     }
     repeat = true;
   }
+  if (body.empty())
+  {
+    if (error)
+      *error = L"invalid after-seconds (want >0, hooked, or hooked+N)";
+    return false;
+  }
+
+  bool afterHooked = false;
+  std::wstring sec = body;
+  if (body.size() >= 6 && _wcsnicmp(body.c_str(), L"hooked", 6) == 0)
+  {
+    afterHooked = true;
+    if (body.size() == 6)
+    {
+      out->afterSec = 0;
+      out->repeat = repeat;
+      out->afterHooked = true;
+      return true;
+    }
+    if (body[6] != L'+')
+    {
+      if (error)
+        *error = L"invalid hooked offset (use hooked or hooked+N)";
+      return false;
+    }
+    sec = body.substr(7);
+  }
+
+  wchar_t* end = nullptr;
+  const double n = wcstod(sec.c_str(), &end);
+  if (end == sec.c_str() || (end && *end != L'\0') || !std::isfinite(n) || n < 0 ||
+      (!afterHooked && n <= 0))
+  {
+    if (error)
+      *error = L"invalid after-seconds (want >0, hooked, or hooked+N[,repeat])";
+    return false;
+  }
   out->afterSec = n;
   out->repeat = repeat;
+  out->afterHooked = afterHooked;
   return true;
 }
 
@@ -423,17 +450,19 @@ void PrintConfig(const Config& c)
   Log("  topmost     = %d", c.topmost ? 1 : 0);
   Log("  no-hud      = %d", c.noHud ? 1 : 0);
   Log("  verbose     = %d", c.verbose ? 1 : 0);
-  if (c.recreateSwapchainAfter.afterSec > 0)
-    Log("  recreate-swapchain-after = %.3fs%s", c.recreateSwapchainAfter.afterSec,
+  if (c.recreateSwapchainAfter.afterSec > 0 || c.recreateSwapchainAfter.afterHooked)
+    Log("  recreate-swapchain-after = %s%.3fs%s",
+        c.recreateSwapchainAfter.afterHooked ? "hooked+" : "", c.recreateSwapchainAfter.afterSec,
         c.recreateSwapchainAfter.repeat ? " repeat" : "");
-  if (c.recreateDeviceAfter.afterSec > 0)
-    Log("  recreate-device-after = %.3fs%s", c.recreateDeviceAfter.afterSec,
-        c.recreateDeviceAfter.repeat ? " repeat" : "");
-  if (c.resizeAfter.afterSec > 0)
-    Log("  resize-after = %.3fs%s", c.resizeAfter.afterSec, c.resizeAfter.repeat ? " repeat" : "");
-  if (c.modeCycleAfter.afterSec > 0)
-    Log("  mode-cycle-after = %.3fs%s", c.modeCycleAfter.afterSec,
-        c.modeCycleAfter.repeat ? " repeat" : "");
+  if (c.recreateDeviceAfter.afterSec > 0 || c.recreateDeviceAfter.afterHooked)
+    Log("  recreate-device-after = %s%.3fs%s", c.recreateDeviceAfter.afterHooked ? "hooked+" : "",
+        c.recreateDeviceAfter.afterSec, c.recreateDeviceAfter.repeat ? " repeat" : "");
+  if (c.resizeAfter.afterSec > 0 || c.resizeAfter.afterHooked)
+    Log("  resize-after = %s%.3fs%s", c.resizeAfter.afterHooked ? "hooked+" : "",
+        c.resizeAfter.afterSec, c.resizeAfter.repeat ? " repeat" : "");
+  if (c.modeCycleAfter.afterSec > 0 || c.modeCycleAfter.afterHooked)
+    Log("  mode-cycle-after = %s%.3fs%s", c.modeCycleAfter.afterHooked ? "hooked+" : "",
+        c.modeCycleAfter.afterSec, c.modeCycleAfter.repeat ? " repeat" : "");
   if (c.churnHz > 0)
     Log("  churn       = %.3f Hz", c.churnHz);
   Log("  scene       = %s", Narrow(scene::SceneIdName(c.scene)).c_str());
@@ -474,10 +503,10 @@ Options:
   --topmost                 WS_EX_TOPMOST
   --no-hud                  Hide on-screen HUD
   --verbose                 Per-frame scene-emit / d3d*-draw / d3d*-hud on stderr
-  --recreate-swapchain-after <s>[,repeat]  F3 after N seconds
-  --recreate-device-after <s>[,repeat]     F4 after N seconds
-  --resize-after <s>[,repeat]              F2 after N seconds
-  --mode-cycle-after <s>[,repeat]          F1 after N seconds
+  --recreate-swapchain-after <when>[,repeat]  F3: 5 | hooked | hooked+2
+  --recreate-device-after <when>[,repeat]     F4
+  --resize-after <when>[,repeat]              F2
+  --mode-cycle-after <when>[,repeat]          F1
   --churn <hz>              Arm F6-style resize/recreate churn at launch
   --scene <name>            Draw-list scene for d3d11/d3d12/none (default: aurora)
   --scene-seed <u32>        Deterministic scene RNG seed (default: 0xC5A2EE)
@@ -805,7 +834,7 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
         return false;
       wchar_t* end = nullptr;
       const double hz = wcstod(v.c_str(), &end);
-      if (end == v.c_str() || (end && *end != L'\0') || hz <= 0 || hz > 30)
+      if (end == v.c_str() || (end && *end != L'\0') || !std::isfinite(hz) || hz <= 0 || hz > 30)
       {
         *error = L"invalid --churn Hz (want >0 and <=30)";
         return false;

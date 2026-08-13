@@ -637,8 +637,10 @@ wait unhooked      -> the recreate tore it down
 wait hooked        -> OBS re-hooked and capture recovered
 ```
 
-Flags: `--recreate-swapchain-after <s>[,repeat]`, `--recreate-device-after`,
-`--resize-after`, `--mode-cycle-after`, `--churn <hz>`.
+Flags: `--recreate-swapchain-after <when>[,repeat]` (`5` / `hooked` / `hooked+2`),
+`--recreate-device-after`, `--resize-after`, `--mode-cycle-after`, `--churn <hz>`.
+Prefer `hooked+N` so the timer starts on first `hooked`, not process start
+(OBS inject is often ~8s). `--churn` is chatty on stdout (~2 events/s).
 Events: `swapchain_recreated`, `device_recreated`, `resized`, `mode_changed`.
 Per-frame stderr (`scene-emit` / `d3d*-draw`) is gated behind `--verbose` (default off).
 `--config` INI was deleted (no consumer; `#`-strip could truncate titles).

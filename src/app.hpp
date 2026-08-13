@@ -92,6 +92,11 @@ private:
   bool hookPresent_ = false;
   bool hookedEmitted_ = false;
   bool hookBlockedEmitted_ = false;
+  double firstHookedAtSec_ = 0; // 0 = never hooked; not cleared on unhooked
+  bool waitHookSwapchain_ = false;
+  bool waitHookDevice_ = false;
+  bool waitHookResize_ = false;
+  bool waitHookMode_ = false;
 
   FgExit exitCode_ = FgExit::Ok;
 

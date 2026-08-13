@@ -23,11 +23,12 @@ enum class GraphicsApi
   None,
 };
 
-// CLI arm for F1–F4: `--recreate-swapchain-after 5` or `5,repeat`.
+// CLI arm for F1–F4: `5`, `5,repeat`, `hooked`, `hooked+2`, `hooked+2,repeat`.
 struct ScheduledAfter
 {
-  double afterSec = 0; // 0 = off
+  double afterSec = 0; // 0 = off (unless afterHooked)
   bool repeat = false;
+  bool afterHooked = false; // start the timer on first hooked, not process start
 };
 
 struct Config
