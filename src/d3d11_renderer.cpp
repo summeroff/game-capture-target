@@ -5,6 +5,7 @@
 #include "gfx_math.hpp"
 #include "log.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -655,10 +656,10 @@ public:
       const float textScale = 2.f;
       const float lineH = font8x8::kGlyphH * textScale + 3.f;
       const float plateH = 10.f + lineH * float(lines.size()) + 6.f;
-      const float plateW = 380.f;
+      const float plateW = (std::min)(380.f, float(width_) - 8.f);
       // Pixel-space rect for plate (axis-aligned, top-left).
       ctx_->PSSetShader(psSolid_.Get(), nullptr, 0);
-      DrawPixelRect(ortho, 4.f, 4.f, 4.f + plateW, 4.f + plateH, 0.f, 0.f, 0.f, 0.62f);
+      DrawPixelRect(ortho, 4.f, 4.f, 4.f + plateW, 4.f + plateH, 0.f, 0.f, 0.f, 0.32f);
 
       DrawTextPx(big, (width_ - tw) * 0.5f + 2.f, height_ * 0.06f + 2.f, scale, 0.f, 0.f, 0.f,
                  0.55f);
