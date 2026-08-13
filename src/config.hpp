@@ -23,6 +23,14 @@ enum class GraphicsApi
   None,
 };
 
+// CLI arm for F1–F4: `5`, `5,repeat`, `hooked`, `hooked+2`, `hooked+2,repeat`.
+struct ScheduledAfter
+{
+  double afterSec = 0; // 0 = off (unless afterHooked)
+  bool repeat = false;
+  bool afterHooked = false; // start the timer on first hooked, not process start
+};
+
 struct Config
 {
   std::wstring title = L"Fake Game";
@@ -38,6 +46,13 @@ struct Config
   int exitAfterSeconds = 0;
   bool topmost = false;
   bool noHud = false;
+  bool verbose = false; // per-frame scene-emit / d3d*-draw / d3d*-hud (default off)
+
+  ScheduledAfter recreateSwapchainAfter;
+  ScheduledAfter recreateDeviceAfter;
+  ScheduledAfter resizeAfter;
+  ScheduledAfter modeCycleAfter;
+  double churnHz = 0; // 0 = off; >0 arms F6-style churn at launch
 
   scene::SceneId scene = scene::SceneId::Aurora;
   uint32_t sceneSeed = 0x00C5A2EEu;
@@ -76,7 +91,7 @@ struct Config
   bool version = false;
 };
 
-// Parse argv. Flags override --config and --profile.
+// Parse argv. Flags override --profile.
 bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error);
 
 const wchar_t* WindowModeName(WindowMode m);

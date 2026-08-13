@@ -4,8 +4,9 @@
 #include "profiles.hpp"
 #include "version_build.h"
 
+#include <cmath>
 #include <cstdio>
-#include <fstream>
+#include <cstdlib>
 #include <string>
 
 namespace
@@ -125,6 +126,69 @@ bool ParseGpuMemMb(const std::wstring& v, int* out)
     return true;
   }
   return false;
+}
+
+// "5" / "5,repeat" / "hooked" / "hooked+2" / "hooked+2,repeat".
+bool ParseScheduledAfter(const std::wstring& v, ScheduledAfter* out, std::wstring* error)
+{
+  if (!out)
+    return false;
+  std::wstring body = v;
+  bool repeat = false;
+  const auto comma = v.find(L',');
+  if (comma != std::wstring::npos)
+  {
+    body = v.substr(0, comma);
+    const std::wstring extra = v.substr(comma + 1);
+    if (extra.empty() || !EqI(extra, L"repeat"))
+    {
+      if (error)
+        *error = L"invalid after suffix (use ,repeat)";
+      return false;
+    }
+    repeat = true;
+  }
+  if (body.empty())
+  {
+    if (error)
+      *error = L"invalid after-seconds (want >0, hooked, or hooked+N)";
+    return false;
+  }
+
+  bool afterHooked = false;
+  std::wstring sec = body;
+  if (body.size() >= 6 && _wcsnicmp(body.c_str(), L"hooked", 6) == 0)
+  {
+    afterHooked = true;
+    if (body.size() == 6)
+    {
+      out->afterSec = 0;
+      out->repeat = repeat;
+      out->afterHooked = true;
+      return true;
+    }
+    if (body[6] != L'+')
+    {
+      if (error)
+        *error = L"invalid hooked offset (use hooked or hooked+N)";
+      return false;
+    }
+    sec = body.substr(7);
+  }
+
+  wchar_t* end = nullptr;
+  const double n = wcstod(sec.c_str(), &end);
+  if (end == sec.c_str() || (end && *end != L'\0') || !std::isfinite(n) || n < 0 ||
+      (!afterHooked && n <= 0))
+  {
+    if (error)
+      *error = L"invalid after-seconds (want >0, hooked, or hooked+N[,repeat])";
+    return false;
+  }
+  out->afterSec = n;
+  out->repeat = repeat;
+  out->afterHooked = afterHooked;
+  return true;
 }
 
 bool ApplyKeyValue(Config* c, const std::wstring& key, const std::wstring& value,
@@ -272,75 +336,6 @@ bool ApplyKeyValue(Config* c, const std::wstring& key, const std::wstring& value
   return false;
 }
 
-bool LoadIni(const std::wstring& path, Config* c, std::wstring* error)
-{
-  std::ifstream in(path);
-  if (!in)
-  {
-    *error = L"cannot open config file: " + path;
-    return false;
-  }
-
-  std::string line;
-  int lineNo = 0;
-  while (std::getline(in, line))
-  {
-    ++lineNo;
-    if (lineNo == 1 && line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
-        static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF)
-    {
-      line.erase(0, 3);
-    }
-
-    const auto hash = line.find(';');
-    if (hash != std::string::npos)
-      line = line.substr(0, hash);
-    const auto hash2 = line.find('#');
-    if (hash2 != std::string::npos)
-      line = line.substr(0, hash2);
-
-    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-      line.pop_back();
-    size_t b = 0;
-    while (b < line.size() && (line[b] == ' ' || line[b] == '\t'))
-      ++b;
-    line = line.substr(b);
-    if (line.empty() || line.front() == '[')
-      continue;
-
-    const auto eq = line.find('=');
-    if (eq == std::string::npos)
-      continue;
-
-    std::string k = line.substr(0, eq);
-    std::string v = line.substr(eq + 1);
-    while (!k.empty() && (k.back() == ' ' || k.back() == '\t'))
-      k.pop_back();
-    while (!v.empty() && (v.front() == ' ' || v.front() == '\t'))
-      v.erase(v.begin());
-    if (v.size() >= 2 &&
-        ((v.front() == '"' && v.back() == '"') || (v.front() == '\'' && v.back() == '\'')))
-      v = v.substr(1, v.size() - 2);
-
-    const int kn = MultiByteToWideChar(CP_UTF8, 0, k.c_str(), -1, nullptr, 0);
-    const int vn = MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, nullptr, 0);
-    std::wstring wk(static_cast<size_t>(kn > 0 ? kn - 1 : 0), L'\0');
-    std::wstring wv(static_cast<size_t>(vn > 0 ? vn - 1 : 0), L'\0');
-    if (kn > 1)
-      MultiByteToWideChar(CP_UTF8, 0, k.c_str(), -1, wk.data(), kn);
-    if (vn > 1)
-      MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, wv.data(), vn);
-
-    std::wstring err;
-    if (!ApplyKeyValue(c, wk, wv, &err))
-    {
-      *error = L"config line " + std::to_wstring(lineNo) + L": " + err;
-      return false;
-    }
-  }
-  return true;
-}
-
 bool ConsumeValue(int argc, wchar_t** argv, int* i, std::wstring* out, std::wstring* error,
                   const wchar_t* flag)
 {
@@ -454,6 +449,22 @@ void PrintConfig(const Config& c)
   Log("  exit-after  = %d", c.exitAfterSeconds);
   Log("  topmost     = %d", c.topmost ? 1 : 0);
   Log("  no-hud      = %d", c.noHud ? 1 : 0);
+  Log("  verbose     = %d", c.verbose ? 1 : 0);
+  if (c.recreateSwapchainAfter.afterSec > 0 || c.recreateSwapchainAfter.afterHooked)
+    Log("  recreate-swapchain-after = %s%.3fs%s",
+        c.recreateSwapchainAfter.afterHooked ? "hooked+" : "", c.recreateSwapchainAfter.afterSec,
+        c.recreateSwapchainAfter.repeat ? " repeat" : "");
+  if (c.recreateDeviceAfter.afterSec > 0 || c.recreateDeviceAfter.afterHooked)
+    Log("  recreate-device-after = %s%.3fs%s", c.recreateDeviceAfter.afterHooked ? "hooked+" : "",
+        c.recreateDeviceAfter.afterSec, c.recreateDeviceAfter.repeat ? " repeat" : "");
+  if (c.resizeAfter.afterSec > 0 || c.resizeAfter.afterHooked)
+    Log("  resize-after = %s%.3fs%s", c.resizeAfter.afterHooked ? "hooked+" : "",
+        c.resizeAfter.afterSec, c.resizeAfter.repeat ? " repeat" : "");
+  if (c.modeCycleAfter.afterSec > 0 || c.modeCycleAfter.afterHooked)
+    Log("  mode-cycle-after = %s%.3fs%s", c.modeCycleAfter.afterHooked ? "hooked+" : "",
+        c.modeCycleAfter.afterSec, c.modeCycleAfter.repeat ? " repeat" : "");
+  if (c.churnHz > 0)
+    Log("  churn       = %.3f Hz", c.churnHz);
   Log("  scene       = %s", Narrow(scene::SceneIdName(c.scene)).c_str());
   Log("  scene-seed  = 0x%08X (%u)", c.sceneSeed, c.sceneSeed);
   if (!c.dumpFramePath.empty())
@@ -491,12 +502,17 @@ Options:
   --exit-after <seconds>    Auto-quit (default: 0 = never)
   --topmost                 WS_EX_TOPMOST
   --no-hud                  Hide on-screen HUD
+  --verbose                 Per-frame scene-emit / d3d*-draw / d3d*-hud on stderr
+  --recreate-swapchain-after <when>[,repeat]  F3: 5 | hooked | hooked+2
+  --recreate-device-after <when>[,repeat]     F4
+  --resize-after <when>[,repeat]              F2
+  --mode-cycle-after <when>[,repeat]          F1
+  --churn <hz>              Arm F6-style resize/recreate churn at launch
   --scene <name>            Draw-list scene for d3d11/d3d12/none (default: aurora)
   --scene-seed <u32>        Deterministic scene RNG seed (default: 0xC5A2EE)
   --list-scenes             Scene table + which APIs implement them
   --dump-frame <path.bmp>   d3d11/d3d12: write one framebuffer BMP after a few frames
   --gpu-mem <size>          Hold GPU RAM: 100|500|1024|2048 or 100mb|500mb|1gb|2gb
-  --config <path>           INI file; flags override file values
   --profile <name>          Apply game profile (title/class/block defaults)
   --list-profiles           Print profile table
   --list-profiles --json    Print profiles as JSON (consumed by tools/launch.ps1)
@@ -565,20 +581,11 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
   Config c;
   FlagSeen seen;
 
-  // Pass 1: --config, --list-profiles, --list-scenes, --help, --version, --profile id
-  std::wstring configPath;
+  // Pass 1: --list-profiles, --list-scenes, --help, --version, --profile id
   std::wstring profileId;
   for (int i = 1; i < argc; ++i)
   {
-    if (EqI(argv[i], L"--config"))
-    {
-      if (i + 1 >= argc)
-      {
-        *error = L"missing value for --config";
-        return false;
-      }
-      configPath = argv[++i];
-    } else if (EqI(argv[i], L"--profile"))
+    if (EqI(argv[i], L"--profile"))
     {
       if (i + 1 >= argc)
       {
@@ -625,12 +632,6 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     return true;
   }
 
-  if (!configPath.empty())
-  {
-    if (!LoadIni(configPath, &c, error))
-      return false;
-  }
-
   if (!profileId.empty())
   {
     const Profile* p = FindProfile(profileId);
@@ -646,7 +647,7 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
   for (int i = 1; i < argc; ++i)
   {
     const std::wstring a = argv[i];
-    if (EqI(a, L"--config") || EqI(a, L"--profile"))
+    if (EqI(a, L"--profile"))
     {
       ++i;
       continue;
@@ -783,6 +784,62 @@ bool ParseConfig(int argc, wchar_t** argv, Config* out, std::wstring* error)
     if (EqI(a, L"--no-hud"))
     {
       c.noHud = true;
+      continue;
+    }
+    if (EqI(a, L"--verbose") || EqI(a, L"--trace"))
+    {
+      c.verbose = true;
+      continue;
+    }
+    if (EqI(a, L"--recreate-swapchain-after"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--recreate-swapchain-after"))
+        return false;
+      if (!ParseScheduledAfter(v, &c.recreateSwapchainAfter, error))
+        return false;
+      continue;
+    }
+    if (EqI(a, L"--recreate-device-after"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--recreate-device-after"))
+        return false;
+      if (!ParseScheduledAfter(v, &c.recreateDeviceAfter, error))
+        return false;
+      continue;
+    }
+    if (EqI(a, L"--resize-after"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--resize-after"))
+        return false;
+      if (!ParseScheduledAfter(v, &c.resizeAfter, error))
+        return false;
+      continue;
+    }
+    if (EqI(a, L"--mode-cycle-after"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--mode-cycle-after"))
+        return false;
+      if (!ParseScheduledAfter(v, &c.modeCycleAfter, error))
+        return false;
+      continue;
+    }
+    if (EqI(a, L"--churn"))
+    {
+      std::wstring v;
+      if (!ConsumeValue(argc, argv, &i, &v, error, L"--churn"))
+        return false;
+      wchar_t* end = nullptr;
+      const double hz = wcstod(v.c_str(), &end);
+      if (end == v.c_str() || (end && *end != L'\0') || !std::isfinite(hz) || hz <= 0 || hz > 30)
+      {
+        *error = L"invalid --churn Hz (want >0 and <=30)";
+        return false;
+      }
+      c.churnHz = hz;
       continue;
     }
     if (EqI(a, L"--scene"))

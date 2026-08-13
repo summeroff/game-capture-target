@@ -23,6 +23,7 @@ struct FrameInfo
   bool flipModel = true;
   int buffers = 2;
   bool noHud = false;
+  bool verbose = false;
 
   // Scene draw-list (owned by App for the frame; pointer may be null).
   const wchar_t* sceneName = L"aurora";
