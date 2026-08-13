@@ -83,12 +83,18 @@ Also:
 
 | Flag | Notes |
 |------|-------|
-| `--events json` | NDJSON on **stdout** (`ready`, `warning`, `block_active`, `hook_attempt` / `hooked` / `unhooked` / `hook_blocked`); human logs on **stderr** |
+| `--events json` | NDJSON on **stdout** (`ready`, `warning`, `block_active`, `hook_attempt` / `hooked` / `unhooked` / `hook_blocked`, `swapchain_recreated` / `device_recreated` / `resized` / `mode_changed`); human logs on **stderr** |
 | `--ready-file <path>` | Writes the `ready` object (same fields) for harnesses that cannot read stdout |
 | `--instance <id>` | Disambiguate concurrent runs: suffix on **class** (exe-matched) or **title** (class-matched) |
 
 `ready` includes app-owned `obsWindowSetting` (`title:class:exe` with `#`→`#22`, `:`→`#3A`),
 `clientWidth` / `clientHeight`, `hwnd`, `pid`, `blockCapture`, `captureExpected`.
+
+`unhooked` means `CaptureHook_HookReady` disappeared after a live `hooked` — typically
+`--block-capture unload-hook` / F7 (`FreeLibrary`). **In-process F3/F4/F6 does not emit
+`unhooked`:** OBS keeps `graphics-hook*.dll` loaded and re-acquires the new device, so
+HookReady never drops. Churn tests wait `hooked` → `swapchain_recreated` / `device_recreated`
+and assert capture is still live (size/frames), not an unhook/rehook cycle.
 
 If a profile matches on **exe** but the process image is still `fakegame.exe` (no rename), a
 `warning` event with `code=exe_mismatch` is emitted (and logged) right after `ready` — so harnesses
@@ -201,7 +207,7 @@ Scenes are **not** shared across APIs. Each backend has its own default visual.
 
 Every transition is logged (stdout, or stderr when `--events json`). `--churn` emits
 `resized` / `swapchain_recreated` on each step (~2/s at `--churn 2`); prefer
-`--recreate-swapchain-after hooked+2` for a single deterministic recovery test.
+`--recreate-swapchain-after hooked+2` then wait `swapchain_recreated` (not `unhooked`).
 
 ## Low-level rename helper
 

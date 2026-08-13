@@ -628,14 +628,18 @@ blocked test uses, without the process suppressing hard-error dialogs globally i
 
 ## The one thing blocking more coverage: churn is hotkey-only
 
-**Shipped in this change (CLI + events).** Harness path:
+**Shipped in this change (CLI + events).** Harness path (Desktop-measured):
 
 ```
-launch cs2 --recreate-swapchain-after 5
-wait hooked        -> capture is live
-wait unhooked      -> the recreate tore it down
-wait hooked        -> OBS re-hooked and capture recovered
+launch cs2 --recreate-swapchain-after hooked+2
+wait hooked                 -> capture is live
+wait swapchain_recreated    -> target recreated; hook stays loaded
+assert capture still live   -> size/frames, not unhooked→hooked
 ```
+
+`unhooked` is **not** part of this sequence. OBS keeps `graphics-hook*.dll` mapped and
+re-acquires the new device; HookReady does not drop. `unhooked` is for real unload
+(`--block-capture unload-hook` / F7).
 
 Flags: `--recreate-swapchain-after <when>[,repeat]` (`5` / `hooked` / `hooked+2`),
 `--recreate-device-after`, `--resize-after`, `--mode-cycle-after`, `--churn <hz>`.

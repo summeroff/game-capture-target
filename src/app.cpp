@@ -520,7 +520,10 @@ void App::TickHookEvents()
     Log("hooked: %s (HookReady present)", st.baseName.c_str());
   }
 
-  // After a successful hooked, HookReady going away is the recovery/churn signal.
+  // After a successful hooked, HookReady going away means the hook tore down
+  // (DLL unload / unload-hook). In-process swapchain/device recreate does NOT
+  // drop HookReady — OBS keeps graphics-hook loaded and re-acquires the device.
+  // Churn tests must wait on swapchain_recreated / device_recreated, not unhooked.
   if (hookedEmitted_ && !hookReady)
   {
     hookedEmitted_ = false;
