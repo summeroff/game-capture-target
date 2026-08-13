@@ -57,13 +57,11 @@ function Get-ProfilesJson {
   return @($parsed.items)
 }
 
-function Encode-ObsPart([string]$s) {
-  if ($null -eq $s) { return '' }
-  return (($s -replace '#','#22') -replace ':','#3A')
-}
-
-function Get-ObsWindowSetting([string]$title, [string]$cls, [string]$exeName) {
-  return "$(Encode-ObsPart $title):$(Encode-ObsPart $cls):$(Encode-ObsPart $exeName)"
+# Write-Error is terminating under $ErrorActionPreference=Stop; use stderr + exit instead.
+function Fail-Launch {
+  param([string]$Message, [int]$Code = 1)
+  [Console]::Error.WriteLine("error: $Message")
+  exit $Code
 }
 
 # PS 5.1 Start-Process flattens string[] ArgumentList without quoting.
@@ -74,13 +72,6 @@ function Format-WinArgList([string[]]$Parts) {
     if ($s -notmatch '[\s"]') { return $s }
     '"' + ($s -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1') + '"'
   }) -join ' '
-}
-
-# Write-Error is terminating under $ErrorActionPreference=Stop; use stderr + exit instead.
-function Fail-Launch {
-  param([string]$Message, [int]$Code = 1)
-  [Console]::Error.WriteLine("error: $Message")
-  exit $Code
 }
 
 function Stop-AllSpawned {
@@ -117,57 +108,6 @@ function Stop-AllSpawned {
     Write-Host "stopped pids: $($stopped -join ', ')"
     Write-Host "cleared $spawnRoot"
   }
-}
-
-function Wait-ProcessWindow {
-  param([int]$ProcessId, [int]$TimeoutSec, [string]$ClassHint)
-  $deadline = (Get-Date).AddSeconds($TimeoutSec)
-  if (-not ("FakeGameNative.User32" -as [type])) {
-    Add-Type -Namespace FakeGameNative -Name User32 -MemberDefinition @"
-public delegate bool EnumProc(System.IntPtr h, System.IntPtr l);
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lp, System.IntPtr l);
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
-[System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
-public static extern int GetClassName(System.IntPtr h, System.Text.StringBuilder s, int n);
-[System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
-public static extern int GetWindowText(System.IntPtr h, System.Text.StringBuilder s, int n);
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool GetClientRect(System.IntPtr h, out RECT r);
-[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-public struct RECT { public int L,T,R,B; }
-"@
-  }
-  while ((Get-Date) -lt $deadline) {
-    $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if (-not $proc) { return $null }
-    $state = @{ Found = [IntPtr]::Zero; Class = ''; Title = '' }
-    $cb = [FakeGameNative.User32+EnumProc]{
-      param([IntPtr]$h, [IntPtr]$l)
-      $wpid = [uint32]0
-      [void][FakeGameNative.User32]::GetWindowThreadProcessId($h, [ref]$wpid)
-      if ($wpid -ne [uint32]$ProcessId) { return $true }
-      if (-not [FakeGameNative.User32]::IsWindowVisible($h)) { return $true }
-      $sb = New-Object System.Text.StringBuilder 256
-      [void][FakeGameNative.User32]::GetClassName($h, $sb, 256)
-      $c = $sb.ToString()
-      if ($ClassHint -and $c -ne $ClassHint) { return $true }
-      $r = New-Object FakeGameNative.User32+RECT
-      [void][FakeGameNative.User32]::GetClientRect($h, [ref]$r)
-      if (($r.R - $r.L) -le 0 -or ($r.B - $r.T) -le 0) { return $true }
-      $tb = New-Object System.Text.StringBuilder 512
-      [void][FakeGameNative.User32]::GetWindowText($h, $tb, 512)
-      $state.Found = $h
-      $state.Class = $c
-      $state.Title = $tb.ToString()
-      return $false
-    }
-    [void][FakeGameNative.User32]::EnumWindows($cb, [IntPtr]::Zero)
-    if ($state.Found -ne [IntPtr]::Zero) {
-      return [pscustomobject]@{ Hwnd = $state.Found; Class = $state.Class; Title = $state.Title }
-    }
-    Start-Sleep -Milliseconds 100
-  }
-  return $null
 }
 
 function Wait-ReadyFile {
@@ -302,79 +242,41 @@ if (-not $alive) {
   Fail-Launch -Message "process exited immediately (pid $($proc.Id)). This is the silent-death case the tool exists to catch." -Code 3
 }
 
-# Prefer app-owned ready JSON (obsWindowSetting computed once in the exe).
+# App-owned ready JSON is the contract (obsWindowSetting computed once in the exe).
 $ready = Wait-ReadyFile -Path $readyPath -TimeoutSec $WaitSeconds -ProcessId $proc.Id
-
-# Fallback: window enum if ready file missing (older builds).
-$classHint = $null
-if ($ready -and $ready.windowClass) {
-  $classHint = [string]$ready.windowClass
-} elseif ($Class) {
-  $classHint = $Class
-} elseif ($Instance -and $p.match -ne 'class') {
-  # exe-matched: app appends _instance to class
-  $baseClass = if ($p.windowClass) { [string]$p.windowClass } else { 'FakeGameWindowClass' }
-  $classHint = "${baseClass}_$Instance"
-} elseif ($p.windowClass) {
-  $classHint = [string]$p.windowClass
-}
-
 if (-not $ready) {
-  $win = Wait-ProcessWindow -ProcessId $proc.Id -TimeoutSec 2 -ClassHint $classHint
-  if (-not $win) {
-    $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
-    if (-not $alive) {
-      if (Test-Path $stderrLog) { Get-Content $stderrLog | Write-Host }
-      Fail-Launch -Message "process exited before ready/window (pid $($proc.Id))" -Code 4
-    }
-    if (Test-Path $stderrLog) { Get-Content $stderrLog | Select-Object -Last 40 | Write-Host }
-    Fail-Launch -Message "timed out waiting for ready event/window (pid $($proc.Id), ${WaitSeconds}s)" -Code 5
+  $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+  if (Test-Path $stderrLog) { Get-Content $stderrLog | Select-Object -Last 40 | Write-Host }
+  if (-not $alive) {
+    Fail-Launch -Message "process exited before ready (pid $($proc.Id))" -Code 4
   }
-  $titleOut = if ($win.Title) { $win.Title } elseif ($Title) { $Title } else { $p.windowTitle }
-  $classOut = if ($win.Class) { $win.Class } elseif ($Class) { $Class } else { $p.windowClass }
-  $obs = Get-ObsWindowSetting -title $titleOut -cls $classOut -exeName $exeName
-  $captureExpected = if ($BlockCapture -eq 'none') { [bool]$p.captureExpected } else { $false }
-  $result = [ordered]@{
-    profile           = $p.id
-    pid               = $proc.Id
-    hwnd              = ('0x{0:X8}' -f $win.Hwnd.ToInt64())
-    exePath           = $dest
-    exeName           = $exeName
-    windowClass       = $classOut
-    windowTitle       = $titleOut
-    api               = $Api
-    blockCapture      = $BlockCapture
-    obsWindowSetting  = $obs
-    captureExpected   = $captureExpected
-    clientWidth       = if ($p.clientWidth) { [int]$p.clientWidth } else { 1280 }
-    clientHeight      = if ($p.clientHeight) { [int]$p.clientHeight } else { 720 }
-  }
-} else {
-  $captureExpected = if ($null -ne $ready.captureExpected) {
-    [bool]$ready.captureExpected
-  } elseif ($BlockCapture -eq 'none') {
-    [bool]$p.captureExpected
-  } else {
-    $false
-  }
-  $result = [ordered]@{
-    profile           = if ($ready.profile) { $ready.profile } else { $p.id }
-    pid               = if ($ready.pid) { [int]$ready.pid } else { $proc.Id }
-    hwnd              = if ($ready.hwnd) { [string]$ready.hwnd } else { '' }
-    exePath           = $dest
-    exeName           = if ($ready.exe) { [string]$ready.exe } else { $exeName }
-    windowClass       = if ($ready.windowClass) { [string]$ready.windowClass } else { '' }
-    windowTitle       = if ($ready.windowTitle) { [string]$ready.windowTitle } else { '' }
-    api               = if ($ready.api) { [string]$ready.api } else { $Api }
-    blockCapture      = if ($ready.blockCapture) { [string]$ready.blockCapture } else { $BlockCapture }
-    obsWindowSetting  = if ($ready.obsWindowSetting) { [string]$ready.obsWindowSetting } else { '' }
-    captureExpected   = $captureExpected
-    clientWidth       = if ($ready.clientWidth) { [int]$ready.clientWidth } else { 1280 }
-    clientHeight      = if ($ready.clientHeight) { [int]$ready.clientHeight } else { 720 }
-  }
-  if ($Instance) { $result.instance = $Instance }
-  if ($ready.instance) { $result.instance = [string]$ready.instance }
+  Fail-Launch -Message "timed out waiting for ready file (pid $($proc.Id), ${WaitSeconds}s)" -Code 5
 }
+
+$captureExpected = if ($null -ne $ready.captureExpected) {
+  [bool]$ready.captureExpected
+} elseif ($BlockCapture -eq 'none') {
+  [bool]$p.captureExpected
+} else {
+  $false
+}
+$result = [ordered]@{
+  profile           = if ($ready.profile) { $ready.profile } else { $p.id }
+  pid               = if ($ready.pid) { [int]$ready.pid } else { $proc.Id }
+  hwnd              = if ($ready.hwnd) { [string]$ready.hwnd } else { '' }
+  exePath           = $dest
+  exeName           = if ($ready.exe) { [string]$ready.exe } else { $exeName }
+  windowClass       = if ($ready.windowClass) { [string]$ready.windowClass } else { '' }
+  windowTitle       = if ($ready.windowTitle) { [string]$ready.windowTitle } else { '' }
+  api               = if ($ready.api) { [string]$ready.api } else { $Api }
+  blockCapture      = if ($ready.blockCapture) { [string]$ready.blockCapture } else { $BlockCapture }
+  obsWindowSetting  = if ($ready.obsWindowSetting) { [string]$ready.obsWindowSetting } else { '' }
+  captureExpected   = $captureExpected
+  clientWidth       = if ($ready.clientWidth) { [int]$ready.clientWidth } else { 1280 }
+  clientHeight      = if ($ready.clientHeight) { [int]$ready.clientHeight } else { 720 }
+}
+if ($Instance) { $result.instance = $Instance }
+if ($ready.instance) { $result.instance = [string]$ready.instance }
 
 # Still alive?
 $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
