@@ -90,10 +90,11 @@ Also:
 `ready` includes app-owned `obsWindowSetting` (`title:class:exe` with `#`→`#22`, `:`→`#3A`),
 `clientWidth` / `clientHeight`, `hwnd`, `pid`, `blockCapture`, `captureExpected`.
 
-`unhooked` means `CaptureHook_HookReady` disappeared after a live `hooked` — typically
-`--block-capture unload-hook` / F7 (`FreeLibrary`). **In-process F3/F4/F6 does not emit
-`unhooked`:** OBS keeps `graphics-hook*.dll` loaded and re-acquires the new device, so
-HookReady never drops. Churn tests wait `hooked` → `swapchain_recreated` / `device_recreated`
+`unhooked` means `CaptureHook_HookReady` disappeared after a live `hooked`
+(`reason` is `hook_ready_gone` if the module is still mapped, `module_gone` /
+`unload-hook` if not). **In-process F3/F4/F6 does not emit `unhooked`:** OBS keeps
+`graphics-hook*.dll` loaded and re-acquires the new device, so HookReady never
+drops. Churn tests wait `hooked` → `swapchain_recreated` / `device_recreated`
 and assert capture is still live (size/frames), not an unhook/rehook cycle.
 
 If a profile matches on **exe** but the process image is still `fakegame.exe` (no rename), a

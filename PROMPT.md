@@ -638,8 +638,9 @@ assert capture still live   -> size/frames, not unhooked→hooked
 ```
 
 `unhooked` is **not** part of this sequence. OBS keeps `graphics-hook*.dll` mapped and
-re-acquires the new device; HookReady does not drop. `unhooked` is for real unload
-(`--block-capture unload-hook` / F7).
+re-acquires the new device; HookReady does not drop. `unhooked` is HookReady teardown
+after a prior `hooked` (often unload-hook / F7; also `hook_ready_gone` if the module
+stays mapped).
 
 Flags: `--recreate-swapchain-after <when>[,repeat]` (`5` / `hooked` / `hooked+2`),
 `--recreate-device-after`, `--resize-after`, `--mode-cycle-after`, `--churn <hz>`.

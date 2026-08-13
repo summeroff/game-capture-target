@@ -519,8 +519,10 @@ Options:
   --block-capture <mode>    none | signature-policy | squat-ipc | unload-hook
   --block-capture-after <s> Delay before applying block (0 = immediate)
   --show-block-errors       Do not suppress Windows loader hard-error dialogs
-  --events json             NDJSON on stdout (ready/hook/unhooked/block/recreated); Log→stderr
-                            unhooked = HookReady gone (DLL unload), not F3/F4 recreate
+  --events json             NDJSON on stdout: ready, warning, block_active,
+                            hook_attempt, hooked, unhooked, hook_blocked,
+                            swapchain_recreated, device_recreated, resized, mode_changed
+                            unhooked = HookReady gone after hooked (not F3/F4 recreate)
   --ready-file <path>       Write ready event JSON to file (harnesses without stdout)
   --instance <id>           Disambiguate concurrent runs (class or title suffix)
   --version / -V            Print version string and exit

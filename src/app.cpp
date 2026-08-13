@@ -520,10 +520,11 @@ void App::TickHookEvents()
     Log("hooked: %s (HookReady present)", st.baseName.c_str());
   }
 
-  // After a successful hooked, HookReady going away means the hook tore down
-  // (DLL unload / unload-hook). In-process swapchain/device recreate does NOT
-  // drop HookReady — OBS keeps graphics-hook loaded and re-acquires the device.
-  // Churn tests must wait on swapchain_recreated / device_recreated, not unhooked.
+  // After a successful hooked, HookReady going away is hook teardown
+  // (reason hook_ready_gone if the module is still mapped, module_gone if not).
+  // Common cause: unload-hook / FreeLibrary. In-process F3/F4/F6 recreate does
+  // NOT drop HookReady — OBS keeps graphics-hook loaded and re-acquires.
+  // Churn tests wait on swapchain_recreated / device_recreated, not unhooked.
   if (hookedEmitted_ && !hookReady)
   {
     hookedEmitted_ = false;
