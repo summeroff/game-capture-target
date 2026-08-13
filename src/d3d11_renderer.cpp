@@ -1,6 +1,8 @@
 #include "renderer.hpp"
 
+#include "bmp_write.hpp"
 #include "font8x8.hpp"
+#include "gfx_math.hpp"
 #include "log.hpp"
 
 #include <cmath>
@@ -17,6 +19,15 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 
+using gfx::CBData;
+using gfx::HrMsg;
+using gfx::MatIdentity;
+using gfx::MatMul;
+using gfx::MatOrthoPixels;
+using gfx::MatRotateZ;
+using gfx::MatScale;
+using gfx::MatTranslate;
+using gfx::Vertex;
 using Microsoft::WRL::ComPtr;
 
 namespace
@@ -348,83 +359,6 @@ float4 PSText(VSOut i) : SV_Target
     return float4(i.col.rgb, i.col.a * a);
 }
 )";
-
-struct Vertex
-{
-  float x, y;
-  float u, v;
-};
-
-struct CBData
-{
-  float transform[16];
-  float color[4];
-  float timeRes[4];
-};
-
-void MatIdentity(float* m)
-{
-  std::memset(m, 0, 16 * sizeof(float));
-  m[0] = m[5] = m[10] = m[15] = 1.f;
-}
-
-// Column-major ortho: x,y in pixels → NDC. Y grows down (top-left origin).
-void MatOrthoPixels(float* m, float w, float h)
-{
-  std::memset(m, 0, 16 * sizeof(float));
-  m[0] = 2.f / w;
-  m[5] = -2.f / h;
-  m[10] = 1.f;
-  m[12] = -1.f;
-  m[13] = 1.f;
-  m[15] = 1.f;
-}
-
-void MatMul(float* out, const float* a, const float* b)
-{
-  float t[16];
-  for (int c = 0; c < 4; ++c)
-  {
-    for (int r = 0; r < 4; ++r)
-    {
-      t[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0] + a[1 * 4 + r] * b[c * 4 + 1] +
-                     a[2 * 4 + r] * b[c * 4 + 2] + a[3 * 4 + r] * b[c * 4 + 3];
-    }
-  }
-  std::memcpy(out, t, sizeof(t));
-}
-
-void MatTranslate(float* m, float x, float y)
-{
-  MatIdentity(m);
-  m[12] = x;
-  m[13] = y;
-}
-
-void MatRotateZ(float* m, float rad)
-{
-  MatIdentity(m);
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  m[0] = c;
-  m[1] = s;
-  m[4] = -s;
-  m[5] = c;
-}
-
-void MatScale(float* m, float sx, float sy)
-{
-  MatIdentity(m);
-  m[0] = sx;
-  m[5] = sy;
-}
-
-std::wstring HrMsg(HRESULT hr)
-{
-  wchar_t buf[64];
-  swprintf_s(buf, L"HRESULT 0x%08X", static_cast<unsigned>(hr));
-  return buf;
-}
 
 class D3D11Renderer final : public IRenderer
 {
@@ -1624,82 +1558,10 @@ private:
 
     const int w = static_cast<int>(desc.Width);
     const int h = static_cast<int>(desc.Height);
-    // BMP row pitch must be multiple of 4; 24bpp.
-    const int rowBytes = w * 3;
-    const int pad = (4 - (rowBytes % 4)) & 3;
-    const int stride = rowBytes + pad;
-    const int imgSize = stride * h;
-
-#pragma pack(push, 1)
-    struct BmpFileHeader
-    {
-      uint16_t bfType;
-      uint32_t bfSize;
-      uint16_t bfReserved1;
-      uint16_t bfReserved2;
-      uint32_t bfOffBits;
-    };
-    struct BmpInfoHeader
-    {
-      uint32_t biSize;
-      int32_t biWidth;
-      int32_t biHeight;
-      uint16_t biPlanes;
-      uint16_t biBitCount;
-      uint32_t biCompression;
-      uint32_t biSizeImage;
-      int32_t biXPelsPerMeter;
-      int32_t biYPelsPerMeter;
-      uint32_t biClrUsed;
-      uint32_t biClrImportant;
-    };
-#pragma pack(pop)
-
-    BmpFileHeader fh{};
-    fh.bfType = 0x4D42;
-    fh.bfOffBits = sizeof(BmpFileHeader) + sizeof(BmpInfoHeader);
-    fh.bfSize = fh.bfOffBits + static_cast<uint32_t>(imgSize);
-
-    BmpInfoHeader ih{};
-    ih.biSize = sizeof(BmpInfoHeader);
-    ih.biWidth = w;
-    ih.biHeight = h; // bottom-up
-    ih.biPlanes = 1;
-    ih.biBitCount = 24;
-    ih.biCompression = 0;
-    ih.biSizeImage = static_cast<uint32_t>(imgSize);
-
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, path, L"wb") != 0 || !f)
-    {
-      ctx_->Unmap(tex.Get(), 0);
-      return false;
-    }
-
-    fwrite(&fh, 1, sizeof(fh), f);
-    fwrite(&ih, 1, sizeof(ih), f);
-
-    std::vector<uint8_t> row(static_cast<size_t>(stride), 0);
-    // Source is top-down DXGI; BMP wants bottom-up.
-    for (int y = h - 1; y >= 0; --y)
-    {
-      const auto* src = static_cast<const uint8_t*>(map.pData) + y * map.RowPitch;
-      for (int x = 0; x < w; ++x)
-      {
-        // R8G8B8A8_UNORM
-        const uint8_t r = src[x * 4 + 0];
-        const uint8_t g = src[x * 4 + 1];
-        const uint8_t b = src[x * 4 + 2];
-        row[static_cast<size_t>(x * 3 + 0)] = b;
-        row[static_cast<size_t>(x * 3 + 1)] = g;
-        row[static_cast<size_t>(x * 3 + 2)] = r;
-      }
-      fwrite(row.data(), 1, static_cast<size_t>(stride), f);
-    }
-
-    fclose(f);
+    const bool ok = WriteBgra32ToBmp(path, w, h, static_cast<const uint8_t*>(map.pData),
+                                     static_cast<int>(map.RowPitch));
     ctx_->Unmap(tex.Get(), 0);
-    return true;
+    return ok;
   }
 
   HWND hwnd_ = nullptr;

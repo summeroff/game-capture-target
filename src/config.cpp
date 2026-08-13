@@ -494,7 +494,7 @@ Options:
   --scene <name>            Draw-list scene for d3d11/d3d12/none (default: aurora)
   --scene-seed <u32>        Deterministic scene RNG seed (default: 0xC5A2EE)
   --list-scenes             Scene table + which APIs implement them
-  --dump-frame <path.bmp>   d3d11: write one framebuffer BMP after a few frames
+  --dump-frame <path.bmp>   d3d11/d3d12: write one framebuffer BMP after a few frames
   --gpu-mem <size>          Hold GPU RAM: 100|500|1024|2048 or 100mb|500mb|1gb|2gb
   --config <path>           INI file; flags override file values
   --profile <name>          Apply game profile (title/class/block defaults)

@@ -148,7 +148,7 @@ Prefix title test: `--profile minecraft --title "Minecraft 1.21"`.
 | `--scene <name>` | `aurora` | `aurora` \| `orbital` \| `highway` \| `fractal` |
 | `--scene-seed <u32>` | `0xC5A2EE` | Deterministic scene RNG; fractal even=A / odd=B |
 | `--list-scenes` | — | Scene table |
-| `--dump-frame <path.bmp>` | — | d3d11: one framebuffer BMP after a few frames |
+| `--dump-frame <path.bmp>` | — | d3d11/d3d12: one framebuffer BMP after a few frames |
 | `--gpu-mem <size>` | off | Hold GPU RAM: `100`/`500`/`1024`/`2048` or `100mb`/`500mb`/`1gb`/`2gb` |
 | `--config <path>` | — | INI; flags override |
 | `--profile <name>` | — | |

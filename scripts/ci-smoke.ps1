@@ -145,6 +145,30 @@ Invoke-Smoke -Label "d3d12 orbital" -ArgList @(
   "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
 ) | Out-Null
 
+$dumpDir = Join-Path $env:TEMP ("fg-dump-" + [guid]::NewGuid().ToString("n"))
+New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
+$dump11 = Join-Path $dumpDir "d3d11.bmp"
+$dump12 = Join-Path $dumpDir "d3d12.bmp"
+Invoke-Smoke -Label "d3d11 dump-frame" -ArgList @(
+  "--api", "d3d11", "--dump-frame", $dump11,
+  "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+if (-not (Test-Path -LiteralPath $dump11) -or ((Get-Item $dump11).Length -lt 1000)) {
+  Write-Error "d3d11 dump-frame missing or tiny: $dump11"
+  exit 1
+}
+Write-Host "d3d11 dump-frame OK $((Get-Item $dump11).Length) bytes"
+Invoke-Smoke -Label "d3d12 dump-frame" -ArgList @(
+  "--api", "d3d12", "--dump-frame", $dump12,
+  "--exit-after", "$Seconds", "--width", "640", "--height", "360", "--vsync", "0"
+) | Out-Null
+if (-not (Test-Path -LiteralPath $dump12) -or ((Get-Item $dump12).Length -lt 1000)) {
+  Write-Error "d3d12 dump-frame missing or tiny: $dump12"
+  exit 1
+}
+Write-Host "d3d12 dump-frame OK $((Get-Item $dump12).Length) bytes"
+Remove-Item -LiteralPath $dumpDir -Recurse -Force -ErrorAction SilentlyContinue
+
 # block modes: must self-verify (exit 0 + process lived). Prefer --events json + ready-file.
 function Invoke-BlockSmoke {
   param(

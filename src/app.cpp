@@ -669,16 +669,17 @@ void App::ApplyWindowMode(WindowMode mode, bool initial)
   }
 
   std::wstring err;
+  int cw = 0, ch = 0;
+  ClientSize(&cw, &ch);
   if (renderer_)
   {
-    int cw = 0, ch = 0;
-    ClientSize(&cw, &ch);
     if (cw > 0 && ch > 0)
       renderer_->Resize(cw, ch, &err);
     renderer_->SetMode(mode, &err);
   }
 
-  Log("mode -> %s client=%dx%d", Narrow(WindowModeName(mode)).c_str(), cfg_.width, cfg_.height);
+  ClientSize(&cw, &ch);
+  Log("mode -> %s client=%dx%d", Narrow(WindowModeName(mode)).c_str(), cw, ch);
 }
 
 int App::Run()
