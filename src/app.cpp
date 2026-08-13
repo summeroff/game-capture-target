@@ -79,9 +79,10 @@ App::~App()
     DestroyWindow(hwnd_);
     hwnd_ = nullptr;
   }
-  if (atom_)
+  if (classOwned_)
   {
     UnregisterClassW(cfg_.windowClass.c_str(), GetModuleHandleW(nullptr));
+    classOwned_ = false;
     atom_ = 0;
   }
 }
@@ -167,19 +168,21 @@ bool App::RegisterWindowClass(std::wstring* error)
   wc.hIconSm = wc.hIcon;
 
   atom_ = RegisterClassExW(&wc);
-  if (!atom_)
+  if (atom_)
   {
-    const DWORD err = GetLastError();
-    if (err == ERROR_CLASS_ALREADY_EXISTS)
-    {
-      // Reuse existing class if previous run crashed mid-unregister.
-      atom_ = 1;
-      return true;
-    }
-    *error = L"RegisterClassEx failed, GetLastError=" + std::to_wstring(err);
-    return false;
+    classOwned_ = true;
+    return true;
   }
-  return true;
+  const DWORD err = GetLastError();
+  if (err == ERROR_CLASS_ALREADY_EXISTS)
+  {
+    // Same-process reuse (e.g. a leftover class). Do not UnregisterClass — we did not register it.
+    classOwned_ = false;
+    atom_ = 0;
+    return true;
+  }
+  *error = L"RegisterClassEx failed, GetLastError=" + std::to_wstring(err);
+  return false;
 }
 
 bool App::CreateMainWindow(std::wstring* error)

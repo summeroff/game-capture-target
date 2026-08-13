@@ -5,6 +5,7 @@
 #include "gfx_math.hpp"
 #include "log.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -345,9 +346,9 @@ public:
       const float textScale = 2.f;
       const float lineH = 8.f * textScale + 3.f;
       const float plateH = 10.f + lineH * float(lines.size()) + 6.f;
-      const float plateW = 380.f;
+      const float plateW = (std::min)(380.f, float(width_) - 8.f);
       DrawSolidXform(fi, ortho, 4.f + plateW * 0.5f, 4.f + plateH * 0.5f, 0.f, plateW, plateH, 0.f,
-                     0.f, 0.f, 0.62f, false);
+                     0.f, 0.f, 0.32f, false);
       float y = 10.f;
       for (const auto& s : lines)
       {
@@ -735,7 +736,7 @@ private:
       }
       return true;
     };
-    if (!makePso(psSolid.Get(), false, pipelineSolid_))
+    if (!makePso(psSolid.Get(), true, pipelineSolid_))
       return false;
     if (!makePso(psMat.Get(), true, pipelineMaterial_))
       return false;

@@ -23,17 +23,33 @@ public:
     hwnd_ = hwnd;
     width_ = cfg.width;
     height_ = cfg.height;
+    EnsureFonts();
     Log("none: GDI-only renderer (no swapchain) — OBS should report 'not a game'");
     return true;
   }
 
-  void Shutdown() override { hwnd_ = nullptr; }
+  void Shutdown() override
+  {
+    ReleaseBackbuffer();
+    if (fontBig_)
+    {
+      DeleteObject(fontBig_);
+      fontBig_ = nullptr;
+    }
+    if (fontSmall_)
+    {
+      DeleteObject(fontSmall_);
+      fontSmall_ = nullptr;
+    }
+    hwnd_ = nullptr;
+  }
 
   bool Resize(int width, int height, std::wstring* error) override
   {
     (void)error;
     width_ = width;
     height_ = height;
+    ReleaseBackbuffer();
     return true;
   }
 
@@ -77,9 +93,12 @@ public:
       return;
     }
 
-    HDC mem = CreateCompatibleDC(hdc);
-    HBITMAP bmp = CreateCompatibleBitmap(hdc, w, h);
-    HGDIOBJ old = SelectObject(mem, bmp);
+    HDC mem = EnsureBackbuffer(hdc, w, h);
+    if (!mem)
+    {
+      ReleaseDC(hwnd_, hdc);
+      return;
+    }
 
     const scene::SceneDraw* sd = info.sceneDraw;
     const int cr = sd ? int(sd->clearR * 255.f) : 8;
@@ -143,20 +162,13 @@ public:
     {
       SetBkMode(mem, TRANSPARENT);
       SetTextColor(mem, RGB(255, 240, 80));
-      HFONT big = CreateFontW(56, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
-                              FIXED_PITCH | FF_MODERN, L"Consolas");
-      HFONT small = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
-                                FIXED_PITCH | FF_MODERN, L"Consolas");
-
-      HGDIOBJ oldF = SelectObject(mem, big);
+      HGDIOBJ oldF = SelectObject(mem, fontBig_ ? fontBig_ : GetStockObject(SYSTEM_FONT));
       wchar_t bigNum[32];
       swprintf_s(bigNum, L"%llu", static_cast<unsigned long long>(info.frameIndex));
       RECT tr{0, h / 8, w, h / 8 + 70};
       DrawTextW(mem, bigNum, -1, &tr, DT_CENTER | DT_SINGLELINE);
 
-      SelectObject(mem, small);
+      SelectObject(mem, fontSmall_ ? fontSmall_ : GetStockObject(SYSTEM_FONT));
       SetTextColor(mem, RGB(230, 240, 255));
       std::wstring hud;
       hud += L"frame  " + std::to_wstring(info.frameIndex) + L"\n";
@@ -192,17 +204,10 @@ public:
       DrawTextW(mem, hud.c_str(), -1, &hr, DT_LEFT | DT_TOP | DT_NOPREFIX);
 
       SelectObject(mem, oldF);
-      DeleteObject(big);
-      DeleteObject(small);
     }
 
     BitBlt(hdc, 0, 0, w, h, mem, 0, 0, SRCCOPY);
-
-    SelectObject(mem, old);
-    DeleteObject(bmp);
-    DeleteDC(mem);
     ReleaseDC(hwnd_, hdc);
-
     ValidateRect(hwnd_, nullptr);
   }
 
@@ -222,6 +227,73 @@ private:
     };
     return RGB(ch(r), ch(g), ch(b));
   }
+
+  void EnsureFonts()
+  {
+    if (!fontBig_)
+    {
+      fontBig_ = CreateFontW(56, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
+                             FIXED_PITCH | FF_MODERN, L"Consolas");
+    }
+    if (!fontSmall_)
+    {
+      fontSmall_ = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                               OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
+                               FIXED_PITCH | FF_MODERN, L"Consolas");
+    }
+  }
+
+  void ReleaseBackbuffer()
+  {
+    if (memDc_ && oldBmp_)
+      SelectObject(memDc_, oldBmp_);
+    oldBmp_ = nullptr;
+    if (bmp_)
+    {
+      DeleteObject(bmp_);
+      bmp_ = nullptr;
+    }
+    if (memDc_)
+    {
+      DeleteDC(memDc_);
+      memDc_ = nullptr;
+    }
+    bmpW_ = 0;
+    bmpH_ = 0;
+  }
+
+  HDC EnsureBackbuffer(HDC hdc, int w, int h)
+  {
+    if (memDc_ && bmp_ && bmpW_ == w && bmpH_ == h)
+      return memDc_;
+    ReleaseBackbuffer();
+    memDc_ = CreateCompatibleDC(hdc);
+    if (!memDc_)
+      return nullptr;
+    bmp_ = CreateCompatibleBitmap(hdc, w, h);
+    if (!bmp_)
+    {
+      DeleteDC(memDc_);
+      memDc_ = nullptr;
+      return nullptr;
+    }
+    oldBmp_ = SelectObject(memDc_, bmp_);
+    bmpW_ = w;
+    bmpH_ = h;
+    return memDc_;
+  }
+
+  HWND hwnd_ = nullptr;
+  int width_ = 0;
+  int height_ = 0;
+  HFONT fontBig_ = nullptr;
+  HFONT fontSmall_ = nullptr;
+  HDC memDc_ = nullptr;
+  HBITMAP bmp_ = nullptr;
+  HGDIOBJ oldBmp_ = nullptr;
+  int bmpW_ = 0;
+  int bmpH_ = 0;
 
   void DrawPrimGdi(HDC mem, const scene::Prim& p)
   {
@@ -324,10 +396,6 @@ private:
     }
     }
   }
-
-  HWND hwnd_ = nullptr;
-  int width_ = 0;
-  int height_ = 0;
 };
 
 } // namespace

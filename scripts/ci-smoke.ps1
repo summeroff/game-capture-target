@@ -348,6 +348,68 @@ Invoke-BlockSmoke -Label "events ready + instance" -ExpectBlockMode "none" -Expe
   "--width", "640", "--height", "360", "--vsync", "0", "--block-capture", "none"
 ) | Out-Null
 
+# Two concurrent --instance targets: distinct classes, both stay alive.
+# Do not use Start-Process -ArgumentList <one string> (PS 5.1 quoting) or
+# --exit-after shorter than the wait (Copilot: crash after ready would pass).
+Write-Host ""
+Write-Host "=== concurrent --instance a+b ===" -ForegroundColor Cyan
+$pairDir = Join-Path $env:TEMP ("fg-smoke-pair-" + [guid]::NewGuid().ToString("n"))
+New-Item -ItemType Directory -Force -Path $pairDir | Out-Null
+$pair = @()
+foreach ($id in @('a', 'b')) {
+  $ready = Join-Path $pairDir "ready-$id.json"
+  $argList = @(
+    "--api", "none", "--profile", "cs2", "--instance", $id,
+    "--width", "320", "--height", "180", "--vsync", "0",
+    "--block-capture", "none", "--ready-file", $ready
+  )
+  $p = Start-Process -FilePath $Exe -ArgumentList $argList -PassThru -WindowStyle Hidden
+  $pair += [pscustomobject]@{ Id = $id; Proc = $p; Ready = $ready }
+}
+$deadline = (Get-Date).AddSeconds(15)
+$readyObjs = @{}
+foreach ($item in $pair) {
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path -LiteralPath $item.Ready) {
+      try {
+        $raw = Get-Content -LiteralPath $item.Ready -Raw -ErrorAction Stop
+        if ($raw -and $raw.Trim().Length -gt 0) {
+          $readyObjs[$item.Id] = ($raw.Trim() | ConvertFrom-Json)
+          break
+        }
+      } catch {}
+    }
+    if ($item.Proc.HasExited) { break }
+    Start-Sleep -Milliseconds 50
+  }
+}
+$failPair = $false
+foreach ($item in $pair) {
+  if (-not $readyObjs.ContainsKey($item.Id)) {
+    Write-Host "SMOKE FAIL: concurrent instance $($item.Id) no ready (exited=$($item.Proc.HasExited))" -ForegroundColor Red
+    $failPair = $true
+  } elseif ($item.Proc.HasExited) {
+    Write-Host "SMOKE FAIL: concurrent instance $($item.Id) exited after ready pid=$($item.Proc.Id)" -ForegroundColor Red
+    $failPair = $true
+  }
+}
+if (-not $failPair) {
+  $ca = [string]$readyObjs['a'].windowClass
+  $cb = [string]$readyObjs['b'].windowClass
+  if ($ca -eq $cb -or $ca -notlike '*_a' -or $cb -notlike '*_b') {
+    Write-Host "SMOKE FAIL: concurrent classes not distinct a=$ca b=$cb" -ForegroundColor Red
+    $failPair = $true
+  }
+}
+foreach ($item in $pair) {
+  if (-not $item.Proc.HasExited) {
+    try { Stop-Process -Id $item.Proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+  }
+}
+Remove-Item -LiteralPath $pairDir -Recurse -Force -ErrorAction SilentlyContinue
+if ($failPair) { exit 1 }
+Write-Host "concurrent instance OK class_a=$($readyObjs['a'].windowClass) class_b=$($readyObjs['b'].windowClass)"
+
 # Unrenamed exe-matched profile must emit warning.exe_mismatch (harness quiet-fail guard).
 Write-Host ""
 Write-Host "=== exe_mismatch warning (unrenamed cs2 profile) ===" -ForegroundColor Cyan

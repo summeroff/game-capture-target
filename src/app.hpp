@@ -68,6 +68,7 @@ private:
   Config cfg_;
   HWND hwnd_ = nullptr;
   ATOM atom_ = 0;
+  bool classOwned_ = false; // UnregisterClass only if this process registered it
   std::unique_ptr<IRenderer> renderer_;
   std::unique_ptr<scene::IScene> scene_;
   scene::SceneDraw sceneDraw_;

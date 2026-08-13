@@ -210,7 +210,7 @@ Every transition is logged (stdout, or stderr when `--events json`). `--churn` e
 ```
 
 Prefer `launch.ps1` for profile-aware QA. `-Json` launches with `--events json` + `--ready-file`
-and prefers the app `ready` object (including `obsWindowSetting`) over re-encoding in PowerShell.
+and reads `obsWindowSetting` only from the app `ready` file (no window-enum fallback).
 
 ## Acceptance (app-side, verified in build)
 
