@@ -349,6 +349,8 @@ Invoke-BlockSmoke -Label "events ready + instance" -ExpectBlockMode "none" -Expe
 ) | Out-Null
 
 # Two concurrent --instance targets: distinct classes, both stay alive.
+# Do not use Start-Process -ArgumentList <one string> (PS 5.1 quoting) or
+# --exit-after shorter than the wait (Copilot: crash after ready would pass).
 Write-Host ""
 Write-Host "=== concurrent --instance a+b ===" -ForegroundColor Cyan
 $pairDir = Join-Path $env:TEMP ("fg-smoke-pair-" + [guid]::NewGuid().ToString("n"))
@@ -356,14 +358,15 @@ New-Item -ItemType Directory -Force -Path $pairDir | Out-Null
 $pair = @()
 foreach ($id in @('a', 'b')) {
   $ready = Join-Path $pairDir "ready-$id.json"
-  $err = Join-Path $pairDir "err-$id.log"
-  $out = Join-Path $pairDir "out-$id.ndjson"
-  $argStr = "--api none --profile cs2 --instance $id --exit-after 4 --width 320 --height 180 --block-capture none --events json --ready-file `"$ready`""
-  $p = Start-Process -FilePath $Exe -ArgumentList $argStr -PassThru -WindowStyle Hidden `
-    -RedirectStandardOutput $out -RedirectStandardError $err
-  $pair += [pscustomobject]@{ Id = $id; Proc = $p; Ready = $ready; Err = $err }
+  $argList = @(
+    "--api", "none", "--profile", "cs2", "--instance", $id,
+    "--width", "320", "--height", "180", "--vsync", "0",
+    "--block-capture", "none", "--ready-file", $ready
+  )
+  $p = Start-Process -FilePath $Exe -ArgumentList $argList -PassThru -WindowStyle Hidden
+  $pair += [pscustomobject]@{ Id = $id; Proc = $p; Ready = $ready }
 }
-$deadline = (Get-Date).AddSeconds(8)
+$deadline = (Get-Date).AddSeconds(15)
 $readyObjs = @{}
 foreach ($item in $pair) {
   while ((Get-Date) -lt $deadline) {
@@ -384,7 +387,9 @@ $failPair = $false
 foreach ($item in $pair) {
   if (-not $readyObjs.ContainsKey($item.Id)) {
     Write-Host "SMOKE FAIL: concurrent instance $($item.Id) no ready (exited=$($item.Proc.HasExited))" -ForegroundColor Red
-    if (Test-Path $item.Err) { Get-Content $item.Err | Select-Object -Last 20 | Write-Host }
+    $failPair = $true
+  } elseif ($item.Proc.HasExited) {
+    Write-Host "SMOKE FAIL: concurrent instance $($item.Id) exited after ready pid=$($item.Proc.Id)" -ForegroundColor Red
     $failPair = $true
   }
 }
